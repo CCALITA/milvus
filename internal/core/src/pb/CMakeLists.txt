@@ -12,4 +12,14 @@
 find_package(Protobuf REQUIRED)
 
 add_source_at_current_directory_recursively()
-add_library(milvus_pb OBJECT ${SOURCE_FILES})
+# Some branches/vendors may not ship generated protobuf sources in-tree.
+# Make this target a no-op object library in that case to keep the build graph valid.
+if(SOURCE_FILES)
+  add_library(milvus_pb OBJECT ${SOURCE_FILES})
+else()
+  # CMake does not allow OBJECT libraries with zero sources.
+  # Create a tiny dummy translation unit so the target exists.
+  file(WRITE ${CMAKE_CURRENT_BINARY_DIR}/milvus_pb_dummy.cc
+"// Auto-generated dummy file (no protobuf sources in this checkout)\n\nnamespace milvus { int milvus_pb_dummy() { return 0; } }\n")
+  add_library(milvus_pb OBJECT ${CMAKE_CURRENT_BINARY_DIR}/milvus_pb_dummy.cc)
+endif()

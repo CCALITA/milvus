@@ -22,6 +22,13 @@ if [[ ${SKIP_3RDPARTY} -eq 1 ]]; then
   exit 0
 fi
 
+set -eo pipefail
+
+# Speed up builds (Conan/CMake/Make parallelism)
+export CONAN_CPU_COUNT="${CONAN_CPU_COUNT:-$(nproc)}"
+export CMAKE_BUILD_PARALLEL_LEVEL="${CMAKE_BUILD_PARALLEL_LEVEL:-$(nproc)}"
+export MAKEFLAGS="${MAKEFLAGS:--j$(nproc)}"
+
 usage() {
   echo "Usage: $0 [-o BUILD_OPENDAL] [-t BUILD_TYPE] [-h]"
   echo "  -o BUILD_OPENDAL  Enable/disable OpenDAL build (ON/OFF, default: OFF)"
@@ -83,25 +90,77 @@ fi
 
 source ${ROOT_DIR}/scripts/setenv.sh
 
-# Add conan to PATH if installed in user's local bin directory
-if [[ -f "$HOME/.local/bin/conan" ]]; then
-    export PATH="$HOME/.local/bin:$PATH"
+# Prefer an already-active Conan in PATH (e.g. from a venv). Only fall back to ~/.local/bin.
+if ! command -v conan >/dev/null 2>&1 && [[ -f "$HOME/.local/bin/conan" ]]; then
+  export PATH="$HOME/.local/bin:$PATH"
 fi
+
+# Under the Nix clang+libc++ shell we intentionally expose Nix runtime libraries via
+# LD_LIBRARY_PATH for the build, but Conan 1.x commonly resolves to /usr/bin/python3.
+# If that Python picks up Nix's OpenSSL/libcrypto on an older host glibc, HTTPS fetches
+# fail with missing GLIBC symbols and Conan can no longer talk to ConanCenter.
+# Keep the build env intact, but scrub Python/loader vars only for Conan invocations.
+run_conan() {
+  if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+    env \
+      -u LD_LIBRARY_PATH \
+      -u PYTHONPATH \
+      -u PYTHONHOME \
+      -u PYTHONNOUSERSITE \
+      conan "$@"
+  else
+    conan "$@"
+  fi
+}
+
+compiler_major_version() {
+  local compiler_bin="$1"
+  local version
+  version="$({ "${compiler_bin}" -dumpfullversion -dumpversion 2>/dev/null || true; } | head -n1)"
+  if [[ -z "${version}" ]]; then
+    version="$({ "${compiler_bin}" --version 2>/dev/null || true; } | sed -n '1s/.*version \([0-9][0-9]*\).*/\1/p')"
+  fi
+  version="${version%%.*}"
+  echo "${version}"
+}
 
 pushd ${BUILD_OUTPUT_DIR}
 
 export CONAN_REVISIONS_ENABLED=1
-export CXXFLAGS="-Wno-error=address -Wno-error=deprecated-declarations -include cstdint"
-export CFLAGS="-Wno-error=address -Wno-error=deprecated-declarations"
+export CXXFLAGS="${CXXFLAGS:+${CXXFLAGS} }-Wno-error=address -Wno-error=deprecated-declarations -Wno-error=unused-command-line-argument -include cstdint"
+export CFLAGS="${CFLAGS:+${CFLAGS} }-Wno-error=address -Wno-error=deprecated-declarations -Wno-error=unused-command-line-argument"
 # Allow CMake 4.x to build packages with old cmake_minimum_required versions (< 3.5)
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
-# Determine the Conan remote URL, using the environment variable if set, otherwise defaulting
-CONAN_ARTIFACTORY_URL="${CONAN_ARTIFACTORY_URL:-https://milvus01.jfrog.io/artifactory/api/conan/default-conan-local}"
-
-if [[ ! `conan remote list` == *default-conan-local* ]]; then
-    conan remote add default-conan-local $CONAN_ARTIFACTORY_URL
+# Local overrides (avoid huge builds / fix upstream recipes while keeping public sources)
+GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
+# Only export this override when explicitly enabled.
+# The storage-only override is useful for offline builds but can break linkage if downstream
+# expects other google-cloud-cpp component libraries.
+if [[ "${MILVUS_USE_GOOGLE_CLOUD_CPP_OVERRIDE:-0}" == "1" ]] && [[ -f "${GOOGLE_CLOUD_CPP_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local google-cloud-cpp/2.5.0@ override (storage-only)"
+  run_conan export "${GOOGLE_CLOUD_CPP_OVERRIDE_DIR}" google-cloud-cpp/2.5.0@
 fi
+
+GNU_CONFIG_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/gnu-config/cci.20210814"
+# Only export this override when explicitly enabled.
+# Normally we prefer the official ConanCenter recipe/binaries.
+if [[ "${MILVUS_USE_GNU_CONFIG_OVERRIDE:-0}" == "1" ]] && [[ -f "${GNU_CONFIG_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local gnu-config override (offline-friendly)"
+  run_conan export "${GNU_CONFIG_OVERRIDE_DIR}"
+fi
+
+LIBAVROCPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libavrocpp/1.11.3"
+# Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
+# upstream recipe. Export a local recipe override that still uses public sources but
+# skips the unused avrogencpp/test-codegen executable path.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBAVROCPP_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local libavrocpp/1.11.3@ override (skip avrogencpp/test-codegen on clang+libc++)"
+  run_conan export "${LIBAVROCPP_OVERRIDE_DIR}" libavrocpp/1.11.3@
+fi
+
+# Conan will use ConanCenter by default (no need for private remote)
+# Remove private remote setup - using public ConanCenter packages
 
 unameOut="$(uname -s)"
 case "${unameOut}" in
@@ -111,7 +170,7 @@ case "${unameOut}" in
     export CMAKE_CXX_COMPILER_LAUNCHER=ccache
     echo "Using CXX: $CXX"
     echo "Using CC: $CC"
-    conan install ${CPP_SRC_DIR} --install-folder conan --build=missing -s build_type=${BUILD_TYPE} -s compiler=clang -s compiler.version=${llvm_version} -s compiler.libcxx=libc++ -s compiler.cppstd=17 -r default-conan-local -u || { echo 'conan install failed'; exit 1; }
+    run_conan install ${CPP_SRC_DIR} --install-folder conan --build=missing -s build_type=${BUILD_TYPE} -s compiler=clang -s compiler.version=${llvm_version} -s compiler.libcxx=libc++ -s compiler.cppstd=20 || { echo 'conan install failed'; exit 1; }
     ;;
   Linux*)
     if [ -f /etc/os-release ]; then
@@ -121,11 +180,153 @@ case "${unameOut}" in
     fi
     echo "Running on ${OS_NAME}"
     export CPU_TARGET=avx
-    GCC_VERSION=`gcc -dumpversion`
-    if [[ `gcc -v 2>&1 | sed -n 's/.*\(--with-default-libstdcxx-abi\)=\(\w*\).*/\2/p'` == "gcc4" ]]; then
-      conan install ${CPP_SRC_DIR} --install-folder conan --build=missing -s build_type=${BUILD_TYPE} -s compiler.version=${GCC_VERSION} -r default-conan-local -u || { echo 'conan install failed'; exit 1; }
+    LINUX_COMPILER="gcc"
+    LINUX_COMPILER_BIN="${CXX:-$(command -v g++ || true)}"
+    if [[ "$(basename "${CC:-}")" == clang* ]] || [[ "$(basename "${CXX:-}")" == clang++* ]] || [[ "${MILVUS_USE_CLANG:-0}" == "1" ]]; then
+      LINUX_COMPILER="clang"
+      LINUX_COMPILER_BIN="${CXX:-$(command -v clang++ || true)}"
+    fi
+    if [[ -z "${LINUX_COMPILER_BIN}" ]]; then
+      echo "Unable to locate a ${LINUX_COMPILER} compiler"
+      exit 1
+    fi
+    LINUX_COMPILER_VERSION="$(compiler_major_version "${LINUX_COMPILER_BIN}")"
+    if [[ -z "${LINUX_COMPILER_VERSION}" ]]; then
+      echo "Unable to determine ${LINUX_COMPILER} compiler version from ${LINUX_COMPILER_BIN}"
+      exit 1
+    fi
+    echo "Using Linux compiler: ${LINUX_COMPILER_BIN} (${LINUX_COMPILER} ${LINUX_COMPILER_VERSION})"
+
+    # Ensure a deterministic profile and avoid Conan using stale compiler settings
+    run_conan profile new default --detect --force >/dev/null 2>&1 || true
+    run_conan profile update settings.compiler=${LINUX_COMPILER} default >/dev/null 2>&1 || true
+    run_conan profile update settings.compiler.version=${LINUX_COMPILER_VERSION} default >/dev/null 2>&1 || true
+    LINUX_CLANG_STDLIB="${MILVUS_CLANG_STDLIB:-libstdc++11}"
+    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
+      case "${LINUX_CLANG_STDLIB}" in
+        libc++|libstdc++|libstdc++11)
+          ;;
+        *)
+          echo "Unsupported MILVUS_CLANG_STDLIB=${LINUX_CLANG_STDLIB}. Supported values: libc++, libstdc++, libstdc++11"
+          exit 1
+          ;;
+      esac
+      echo "Using Linux clang C++ standard library: ${LINUX_CLANG_STDLIB}"
+    fi
+    GCC_DEFAULT_LIBSTDCPP_ABI=""
+    if [[ "${LINUX_COMPILER}" == "gcc" ]]; then
+      GCC_DEFAULT_LIBSTDCPP_ABI="$("${LINUX_COMPILER_BIN}" -v 2>&1 | sed -n 's/.*\(--with-default-libstdcxx-abi\)=\(\w*\).*/\2/p')"
+    fi
+    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
+      run_conan profile update settings.compiler.libcxx=${LINUX_CLANG_STDLIB} default >/dev/null 2>&1 || true
+    elif [[ "${GCC_DEFAULT_LIBSTDCPP_ABI}" != "gcc4" ]]; then
+      run_conan profile update settings.compiler.libcxx=libstdc++11 default >/dev/null 2>&1 || true
+    fi
+
+    # Conan build policy.
+    # - Default: "--build=missing" (use local cache binaries when present; build what is missing)
+    # - If conancenter is disabled (offline): force local builds to avoid attempted downloads,
+    #   but exclude tool packages that may try to fetch upstream tarballs (e.g. cmake).
+    # - You can override by exporting CONAN_BUILD_ARG yourself.
+    if [[ -z "${CONAN_BUILD_ARG:-}" ]]; then
+      CONAN_BUILD_ARG="--build=missing"
+      if run_conan remote list 2>/dev/null | grep -qi "conancenter:.*Disabled: True"; then
+        CONAN_BUILD_ARG="--build=* --build=!cmake/* --build=!pkgconf/* --build=!nlohmann_json/* --build=!opentelemetry-proto/*"
+      fi
+    fi
+    # Explicit override: build everything from source
+    if [[ "${CONAN_FORCE_BUILD_ALL:-0}" == "1" ]]; then
+      CONAN_BUILD_ARG="--build=*"
+    fi
+
+    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
+      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=clang -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=${LINUX_CLANG_STDLIB} -s compiler.cppstd=20 || { echo 'conan install failed'; exit 1; }
+    elif [[ "${GCC_DEFAULT_LIBSTDCPP_ABI}" == "gcc4" ]]; then
+      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} || { echo 'conan install failed'; exit 1; }
     else
-      conan install ${CPP_SRC_DIR} --install-folder conan --build=missing -s build_type=${BUILD_TYPE} -s compiler.version=${GCC_VERSION} -s compiler.libcxx=libstdc++11 -r default-conan-local -u || { echo 'conan install failed'; exit 1; }
+      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=libstdc++11 || { echo 'conan install failed'; exit 1; }
+    fi
+
+    # Prefer Conan-provided CMake when we need a newer host toolchain CMake, but under the
+    # Nix clang+libc++ proof path keep using the Nix shell's own CMake so CMake/plugins run
+    # against the same Nix libc/OpenSSL world as the packages built by that shell.
+    if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+      echo "Using Nix shell CMake: $(cmake --version | head -n1)"
+    else
+      CONAN_HOME_DIR="${CONAN_USER_HOME:-$HOME}/.conan"
+      CONAN_CMAKE_EXE=""
+      if [[ -d "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" ]]; then
+        CONAN_CMAKE_EXE=$(find "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" -maxdepth 3 -type f -name cmake 2>/dev/null | head -n1 || true)
+      fi
+      if [[ -n "${CONAN_CMAKE_EXE}" ]]; then
+        export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
+        echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
+      fi
+    fi
+
+    # Fix Conan-generated FindAWSSDK.cmake: some CMakeLists use COMPONENTS core/s3/...
+    # but the Conan generator names it aws-sdk-cpp-core. Provide a compatible alias.
+    if [[ -f conan/FindAWSSDK.cmake ]]; then
+      if ! grep -q "AWS::core" conan/FindAWSSDK.cmake; then
+        sed -i 's/^set(AWS_COMPONENTS /set(AWS_COMPONENTS AWS::core /' conan/FindAWSSDK.cmake || true
+      fi
+      if ! grep -q "add_library(AWS::core" conan/FindAWSSDK.cmake; then
+        cat >> conan/FindAWSSDK.cmake <<'EOF'
+
+# Milvus compatibility: map AWS::core to Conan target AWS::aws-sdk-cpp-core
+if(TARGET AWS::aws-sdk-cpp-core AND NOT TARGET AWS::core)
+  add_library(AWS::core ALIAS AWS::aws-sdk-cpp-core)
+endif()
+EOF
+      fi
+    fi
+
+    # Fix Conan-generated Findfolly.cmake casing/variables for projects that call find_package(Folly)
+    # Conan emits Findfolly.cmake (lowercase), which won't satisfy find_package(Folly) on Linux.
+    if [[ -f conan/Findfolly.cmake && ! -f conan/FindFolly.cmake ]]; then
+      cat > conan/FindFolly.cmake <<'EOF'
+# Wrapper for Conan-generated Findfolly.cmake
+# Provides the expected FindFolly.cmake entrypoint + Folly_FOUND/Folly_VERSION vars.
+include("${CMAKE_CURRENT_LIST_DIR}/Findfolly.cmake")
+set(Folly_FOUND ${folly_FOUND})
+set(Folly_VERSION ${folly_VERSION})
+EOF
+    fi
+
+    # Fix fmt target naming mismatch:
+    # Some thirdparty CMake expects fmt::fmt-header-only, while Conan's Findfmt.cmake only defines fmt::fmt.
+    if [[ -f conan/Findfmt.cmake ]]; then
+      if ! grep -q "fmt::fmt-header-only" conan/Findfmt.cmake; then
+        cat >> conan/Findfmt.cmake <<'EOF'
+
+# Milvus compatibility: provide fmt::fmt-header-only when only fmt::fmt exists
+if(TARGET fmt::fmt AND NOT TARGET fmt::fmt-header-only)
+  add_library(fmt::fmt-header-only INTERFACE IMPORTED)
+
+  get_target_property(_fmt_inc fmt::fmt INTERFACE_INCLUDE_DIRECTORIES)
+  if(_fmt_inc)
+    set_target_properties(fmt::fmt-header-only PROPERTIES INTERFACE_INCLUDE_DIRECTORIES "${_fmt_inc}")
+  endif()
+
+  get_target_property(_fmt_defs fmt::fmt INTERFACE_COMPILE_DEFINITIONS)
+  if(_fmt_defs)
+    set_target_properties(fmt::fmt-header-only PROPERTIES INTERFACE_COMPILE_DEFINITIONS "${_fmt_defs}")
+  endif()
+
+  get_target_property(_fmt_opts fmt::fmt INTERFACE_COMPILE_OPTIONS)
+  if(_fmt_opts)
+    set_target_properties(fmt::fmt-header-only PROPERTIES INTERFACE_COMPILE_OPTIONS "${_fmt_opts}")
+  endif()
+
+  get_target_property(_fmt_libs fmt::fmt INTERFACE_LINK_LIBRARIES)
+  if(_fmt_libs)
+    set_target_properties(fmt::fmt-header-only PROPERTIES INTERFACE_LINK_LIBRARIES "${_fmt_libs}")
+  else()
+    set_target_properties(fmt::fmt-header-only PROPERTIES INTERFACE_LINK_LIBRARIES fmt::fmt)
+  endif()
+endif()
+EOF
+      fi
     fi
     ;;
   *)
@@ -138,6 +339,7 @@ popd
 mkdir -p ${ROOT_DIR}/internal/core/output/lib
 mkdir -p ${ROOT_DIR}/internal/core/output/include
 
+mkdir -p ${ROOT_DIR}/cmake_build/thirdparty
 pushd ${ROOT_DIR}/cmake_build/thirdparty
 if command -v cargo >/dev/null 2>&1; then
     echo "cargo exists"

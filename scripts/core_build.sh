@@ -102,7 +102,7 @@ USE_DYNAMIC_SIMD="ON"
 USE_OPENDAL="OFF"
 TANTIVY_FEATURES=""
 INDEX_ENGINE="KNOWHERE"
-ENABLE_AZURE_FS="ON"
+ENABLE_AZURE_FS="${ENABLE_AZURE_FS:-ON}"
 : "${ENABLE_GCP_NATIVE:="OFF"}"
 
 while getopts "p:t:s:n:a:y:x:o:f:ulcgbZh" arg; do
@@ -141,6 +141,10 @@ while getopts "p:t:s:n:a:y:x:o:f:ulcgbZh" arg; do
         echo "Set USE_ASAN to ON"
         USE_ASAN="ON"
     fi
+    ;;
+  Z)
+    echo "Build without azure-sdk-for-cpp / Azure Blob support"
+    ENABLE_AZURE_FS="OFF"
     ;;
   y)
     USE_DYNAMIC_SIMD=$OPTARG
@@ -226,9 +230,32 @@ CPU_ARCH=$(get_cpu_arch $CPU_TARGET)
 # In case any 3rdparty (e.g. libavrocpp) requires a minimum version of CMake lower than 3.5
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
+# Prefer Conan-provided CMake (knowhere currently requires >=3.26.4; Ubuntu 22.04 ships 3.22.x)
+CONAN_HOME_DIR="${CONAN_USER_HOME:-$HOME}/.conan"
+CONAN_CMAKE_EXE=""
+if [[ -d "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" ]]; then
+  CONAN_CMAKE_EXE=$(find "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" -maxdepth 3 -type f -name cmake 2>/dev/null | head -n1 || true)
+fi
+if [[ -n "${CONAN_CMAKE_EXE}" ]]; then
+  export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
+  echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
+fi
+
+CMAKE_COMPILER_ARGS=""
+if [[ -n "${CC:-}" ]]; then
+  CMAKE_COMPILER_ARGS="${CMAKE_COMPILER_ARGS} -DCMAKE_C_COMPILER=${CC}"
+fi
+if [[ -n "${CXX:-}" ]]; then
+  CMAKE_COMPILER_ARGS="${CMAKE_COMPILER_ARGS} -DCMAKE_CXX_COMPILER=${CXX}"
+fi
+if [[ -n "${ASM:-}" ]]; then
+  CMAKE_COMPILER_ARGS="${CMAKE_COMPILER_ARGS} -DCMAKE_ASM_COMPILER=${ASM}"
+fi
+
 arch=$(uname -m)
 CMAKE_CMD="cmake \
 ${CMAKE_EXTRA_ARGS} \
+${CMAKE_COMPILER_ARGS} \
 -DBUILD_UNIT_TEST=${BUILD_UNITTEST} \
 -DCMAKE_INSTALL_PREFIX=${INSTALL_PREFIX} \
 -DCMAKE_BUILD_TYPE=${BUILD_TYPE} \

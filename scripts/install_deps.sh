@@ -268,32 +268,33 @@ install_ubuntu_deps() {
         libopenblas-dev libgoogle-perftools-dev
     )
 
-    # Version-specific GCC and clang-format
+    # Keep GCC available for libstdc++/gfortran and install LLVM/clang for Linux builds.
     local gcc_packages=()
-    local clang_format_package=""
+    local llvm_packages=(clang lld libomp-dev)
+    local clang_tools_packages=()
 
     case "$ubuntu_version" in
         20.04)
             gcc_packages=(g++ gcc gfortran)
-            clang_format_package="clang-format-12 clang-tidy-12"
+            clang_tools_packages=(clang-format-12 clang-tidy-12)
             ;;
         22.04)
             gcc_packages=(g++ gcc gfortran g++-11 gcc-11)
-            clang_format_package="clang-format-14 clang-tidy-14"
+            clang_tools_packages=(clang-format-14 clang-tidy-14)
             ;;
         24.04)
             gcc_packages=(g++ gcc gfortran g++-13 gcc-13)
-            clang_format_package="clang-format-17 clang-tidy-17"
+            clang_tools_packages=(clang-format-17 clang-tidy-17)
             ;;
         *)
             print_warn "Ubuntu ${ubuntu_version} not explicitly supported, using default packages"
             gcc_packages=(g++ gcc gfortran)
-            clang_format_package="clang-format clang-tidy"
+            clang_tools_packages=(clang-format clang-tidy)
             ;;
     esac
 
     print_info "Installing packages..."
-    sudo apt-get install -y "${base_packages[@]}" "${gcc_packages[@]}" $clang_format_package
+    sudo apt-get install -y "${base_packages[@]}" "${gcc_packages[@]}" "${llvm_packages[@]}" "${clang_tools_packages[@]}"
 
     # Install CMake if needed
     install_cmake_linux
@@ -307,6 +308,7 @@ install_ubuntu_deps() {
     print_info "Ubuntu dependencies installed successfully!"
     print_info ""
     print_info "To build Milvus, run: make"
+    print_info "For the supported Linux x86_64 clang+libc++ path, use: nix develop .#linux-clang-libcxx"
 }
 
 #######################################

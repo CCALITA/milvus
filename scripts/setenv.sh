@@ -33,10 +33,94 @@ done
 ROOT_DIR="$( cd -P "$( dirname "$SOURCE" )/.." && pwd )"
 export MILVUS_WORK_DIR=$ROOT_DIR
 
+setenv_fail() {
+  echo "ERROR: $1"
+  return 1 2>/dev/null || exit 1
+}
+
+resolve_executable() {
+  local candidate
+  for candidate in "$@"; do
+    if [[ -n "$candidate" ]] && command -v "$candidate" >/dev/null 2>&1; then
+      command -v "$candidate"
+      return 0
+    fi
+  done
+  return 1
+}
+
+append_unique_flag() {
+  local var_name="$1"
+  local flag="$2"
+  local current="${!var_name:-}"
+  case " ${current} " in
+    *" ${flag} "*) return 0 ;;
+  esac
+  export "${var_name}=${current:+${current} }${flag}"
+}
+
 unameOut="$(uname -s)"
 
 case "${unameOut}" in
     Linux*)
+      if [[ "${MILVUS_USE_CLANG:-0}" == "1" ]]; then
+        clang_candidates=()
+        clangxx_candidates=()
+        if [[ "$(basename "${CC:-}")" == clang* ]]; then
+          clang_candidates+=("${CC}")
+        fi
+        if [[ "$(basename "${CXX:-}")" == clang++* ]]; then
+          clangxx_candidates+=("${CXX}")
+        fi
+        if [[ -n "${MILVUS_CLANG_VERSION:-}" ]]; then
+          clang_candidates+=("clang-${MILVUS_CLANG_VERSION}")
+          clangxx_candidates+=("clang++-${MILVUS_CLANG_VERSION}")
+        fi
+        clang_candidates+=("clang" "clang-18" "clang-17" "clang-16" "clang-15" "clang-14")
+        clangxx_candidates+=("clang++" "clang++-18" "clang++-17" "clang++-16" "clang++-15" "clang++-14")
+
+        clang_bin="$(resolve_executable "${clang_candidates[@]}")" || setenv_fail "MILVUS_USE_CLANG=1 but clang was not found"
+        clangxx_bin="$(resolve_executable "${clangxx_candidates[@]}")" || setenv_fail "MILVUS_USE_CLANG=1 but clang++ was not found"
+
+        export CLANG_TOOLS_PATH="$(dirname "${clang_bin}")"
+        export CC="${clang_bin}"
+        export CXX="${clangxx_bin}"
+        export ASM="${clang_bin}"
+
+        if [[ "${MILVUS_CLANG_STDLIB:-}" == "libc++" ]]; then
+          append_unique_flag CXXFLAGS "-stdlib=libc++"
+          append_unique_flag LDFLAGS "-stdlib=libc++"
+          append_unique_flag CGO_CXXFLAGS "-stdlib=libc++"
+          append_unique_flag CGO_LDFLAGS "-stdlib=libc++"
+
+          if [[ -n "${MILVUS_LIBCXX_INCLUDE:-}" ]]; then
+            append_unique_flag CXXFLAGS "-nostdinc++"
+            append_unique_flag CXXFLAGS "-isystem ${MILVUS_LIBCXX_INCLUDE}"
+            append_unique_flag CGO_CXXFLAGS "-nostdinc++"
+            append_unique_flag CGO_CXXFLAGS "-isystem ${MILVUS_LIBCXX_INCLUDE}"
+          fi
+
+          if [[ -n "${MILVUS_LIBCXX_LIBDIR:-}" ]]; then
+            append_unique_flag LDFLAGS "-L${MILVUS_LIBCXX_LIBDIR}"
+            append_unique_flag LDFLAGS "-Wl,-rpath,${MILVUS_LIBCXX_LIBDIR}"
+            append_unique_flag CGO_LDFLAGS "-L${MILVUS_LIBCXX_LIBDIR}"
+            append_unique_flag CGO_LDFLAGS "-Wl,-rpath,${MILVUS_LIBCXX_LIBDIR}"
+          fi
+
+          if [[ -n "${MILVUS_LIBUNWIND_LIBDIR:-}" ]]; then
+            append_unique_flag LDFLAGS "-L${MILVUS_LIBUNWIND_LIBDIR}"
+            append_unique_flag LDFLAGS "-Wl,-rpath,${MILVUS_LIBUNWIND_LIBDIR}"
+            append_unique_flag CGO_LDFLAGS "-L${MILVUS_LIBUNWIND_LIBDIR}"
+            append_unique_flag CGO_LDFLAGS "-Wl,-rpath,${MILVUS_LIBUNWIND_LIBDIR}"
+          fi
+
+          if command -v ld.lld >/dev/null 2>&1; then
+            append_unique_flag LDFLAGS "-fuse-ld=lld"
+            append_unique_flag CGO_LDFLAGS "-fuse-ld=lld"
+          fi
+        fi
+      fi
+
       # check if use asan.
       MILVUS_ENABLE_ASAN_LIB=$(ldd $ROOT_DIR/internal/core/output/lib/libmilvus_core.so | grep asan | awk '{print $3}')
       if [ -n "$MILVUS_ENABLE_ASAN_LIB" ]; then
@@ -91,4 +175,3 @@ case "${unameOut}" in
     *)
       echo "does not supported"
 esac
-

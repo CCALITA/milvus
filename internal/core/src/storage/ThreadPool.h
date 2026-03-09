@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cassert>
+#include <cmath>
 #include <condition_variable>
 #include <functional>
 #include <future>

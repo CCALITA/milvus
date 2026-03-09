@@ -42,6 +42,17 @@ FetchContent_GetProperties( milvus-storage )
 if ( NOT milvus-storage_POPULATED )
     FetchContent_Populate( milvus-storage )
 
+    # Ensure required imported targets exist before building milvus-storage.
+    # On Linux these targets come from Conan's cmake_find_package generator and
+    # are only created when find_package() is called.
+    if(NOT APPLE)
+        find_package(AWSSDK REQUIRED)
+        find_package(google-cloud-cpp REQUIRED)
+        find_package(libavrocpp REQUIRED)
+        find_package(Folly REQUIRED)
+        find_package(fmt REQUIRED)
+    endif()
+
     if(APPLE)
         # On macOS, Conan's aws-c-* packages use deprecated Security framework APIs
         # removed in macOS 15+. Instead, use Homebrew's aws-sdk-cpp (1.11.735+)

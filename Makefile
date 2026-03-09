@@ -408,9 +408,11 @@ plan-parser-so:
 		GO111MODULE=on $(GO) build -buildmode=c-shared -o $(PWD)/internal/core/output/lib/libmilvus-planparser.so $(PWD)/internal/parser/planparserv2/cwrapper/wrapper.go && \
 		mv $(PWD)/internal/core/output/lib/libmilvus-planparser.h $(PWD)/internal/core/output/include/libmilvus-planparser.h && \
 		cp $(PWD)/internal/parser/planparserv2/cwrapper/milvus_plan_parser.h $(PWD)/internal/core/output/include/ && \
-		g++ -std=c++17 -shared -fPIC -o $(PWD)/internal/core/output/lib/libmilvus-planparser-cpp.so $(PWD)/internal/parser/planparserv2/cwrapper/milvus_plan_parser.cpp \
+		PLAN_PARSER_CXX="$${CXX:-g++}" && \
+		"$${PLAN_PARSER_CXX}" $${CXXFLAGS} -std=c++17 -shared -fPIC -o $(PWD)/internal/core/output/lib/libmilvus-planparser-cpp.so $(PWD)/internal/parser/planparserv2/cwrapper/milvus_plan_parser.cpp \
 			-I$(PWD)/internal/core/output/include \
 			-L$(PWD)/internal/core/output/lib -lmilvus-planparser \
+			$${LDFLAGS} \
 			$(planparser_rpath_flag)
 
 # Run code coverage.
