@@ -99,14 +99,23 @@ fi
 # LD_LIBRARY_PATH for the build, but Conan 1.x commonly resolves to /usr/bin/python3.
 # If that Python picks up Nix's OpenSSL/libcrypto on an older host glibc, HTTPS fetches
 # fail with missing GLIBC symbols and Conan can no longer talk to ConanCenter.
-# Keep the build env intact, but scrub Python/loader vars only for Conan invocations.
+# We still scrub loader vars for Conan itself, but keep the Nix cmake on PATH by default:
+# when Conan builds source packages (for example grpc) against Nix-built shared OpenSSL on
+# an older host glibc, `/usr/bin/cmake` can fail to load the package libcrypto.so with
+# `GLIBC_2.38 not found`, while the Nix-shell cmake succeeds inside the same libc/OpenSSL
+# world. Set MILVUS_NIX_DROP_NIX_CMAKE_FOR_CONAN=1 to restore the older behavior if needed.
 run_conan() {
   if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+    local sanitized_path="${PATH}"
+    if [[ "${MILVUS_NIX_DROP_NIX_CMAKE_FOR_CONAN:-0}" == "1" ]]; then
+      sanitized_path="$({ printf '%s' "${sanitized_path}" | tr ':' '\n' | awk '!($0 ~ /^\/nix\/store\/.*-cmake-[^/]*\/bin$/)' | paste -sd: -; } )"
+    fi
     env \
       -u LD_LIBRARY_PATH \
       -u PYTHONPATH \
       -u PYTHONHOME \
       -u PYTHONNOUSERSITE \
+      PATH="${sanitized_path}" \
       conan "$@"
   else
     conan "$@"
@@ -122,6 +131,71 @@ compiler_major_version() {
   fi
   version="${version%%.*}"
   echo "${version}"
+}
+
+ensure_conan_supports_compiler_version() {
+  local compiler_name="$1"
+  local compiler_version="$2"
+  local conan_home settings_file
+
+  if ! command -v python3 >/dev/null 2>&1; then
+    return 0
+  fi
+
+  conan_home="$(run_conan config home 2>/dev/null | tail -n1 | tr -d '\r')"
+  if [[ -z "${conan_home}" ]]; then
+    return 0
+  fi
+
+  settings_file="${conan_home}/settings.yml"
+  if [[ ! -f "${settings_file}" ]]; then
+    return 0
+  fi
+
+  python3 - "${settings_file}" "${compiler_name}" "${compiler_version}" <<'PY'
+from pathlib import Path
+import sys
+
+settings_path = Path(sys.argv[1])
+compiler_name = sys.argv[2]
+compiler_version = sys.argv[3]
+lines = settings_path.read_text().splitlines()
+compiler_header = f"    {compiler_name}:"
+
+in_block = False
+version_start = None
+version_end = None
+for i, line in enumerate(lines):
+    if line == compiler_header:
+        in_block = True
+        continue
+    if in_block and line.startswith("    ") and line.endswith(":") and not line.startswith("        "):
+        break
+    if in_block and line.startswith("        version:"):
+        version_start = i
+        version_end = i
+        while version_end < len(lines) and "]" not in lines[version_end]:
+            version_end += 1
+        break
+
+if version_start is None or version_end is None or version_end >= len(lines):
+    sys.exit(0)
+
+version_blob = "\n".join(lines[version_start:version_end + 1])
+needle = f'"{compiler_version}"'
+if needle in version_blob:
+    print(f"Conan settings already include {compiler_name} {compiler_version}")
+    sys.exit(0)
+
+last_line = lines[version_end]
+closing = last_line.rfind("]")
+if closing == -1:
+    sys.exit(0)
+insert = f', "{compiler_version}"'
+lines[version_end] = last_line[:closing] + insert + last_line[closing:]
+settings_path.write_text("\n".join(lines) + "\n")
+print(f"Patched {settings_path} to admit {compiler_name} {compiler_version}")
+PY
 }
 
 pushd ${BUILD_OUTPUT_DIR}
@@ -199,6 +273,10 @@ case "${unameOut}" in
 
     # Ensure a deterministic profile and avoid Conan using stale compiler settings
     run_conan profile new default --detect --force >/dev/null 2>&1 || true
+
+    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
+      ensure_conan_supports_compiler_version "clang" "${LINUX_COMPILER_VERSION}"
+    fi
     run_conan profile update settings.compiler=${LINUX_COMPILER} default >/dev/null 2>&1 || true
     run_conan profile update settings.compiler.version=${LINUX_COMPILER_VERSION} default >/dev/null 2>&1 || true
     LINUX_CLANG_STDLIB="${MILVUS_CLANG_STDLIB:-libstdc++11}"
@@ -247,21 +325,21 @@ case "${unameOut}" in
       run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=libstdc++11 || { echo 'conan install failed'; exit 1; }
     fi
 
-    # Prefer Conan-provided CMake when we need a newer host toolchain CMake, but under the
-    # Nix clang+libc++ proof path keep using the Nix shell's own CMake so CMake/plugins run
-    # against the same Nix libc/OpenSSL world as the packages built by that shell.
-    if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+    # Prefer Conan-provided CMake when we need a newer host toolchain CMake.
+    # Under the Nix clang+libc++ proof path we default to the Nix shell's CMake so tools run
+    # inside the same libc/OpenSSL world, but allow an explicit Conan-CMake override for cases
+    # where Conan's per-package runtime library dirs make the Nix CMake binary pick up an
+    # incompatible libssl/libcrypto at process start.
+    CONAN_HOME_DIR="${CONAN_USER_HOME:-$HOME}/.conan"
+    CONAN_CMAKE_EXE=""
+    if [[ -d "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" ]]; then
+      CONAN_CMAKE_EXE=$(find "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" -maxdepth 3 -type f -name cmake 2>/dev/null | head -n1 || true)
+    fi
+    if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ "${MILVUS_NIX_FORCE_CONAN_CMAKE:-0}" != "1" ]]; then
       echo "Using Nix shell CMake: $(cmake --version | head -n1)"
-    else
-      CONAN_HOME_DIR="${CONAN_USER_HOME:-$HOME}/.conan"
-      CONAN_CMAKE_EXE=""
-      if [[ -d "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" ]]; then
-        CONAN_CMAKE_EXE=$(find "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" -maxdepth 3 -type f -name cmake 2>/dev/null | head -n1 || true)
-      fi
-      if [[ -n "${CONAN_CMAKE_EXE}" ]]; then
-        export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
-        echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
-      fi
+    elif [[ -n "${CONAN_CMAKE_EXE}" ]]; then
+      export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
+      echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
     fi
 
     # Fix Conan-generated FindAWSSDK.cmake: some CMakeLists use COMPONENTS core/s3/...
