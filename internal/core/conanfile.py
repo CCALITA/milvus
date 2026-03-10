@@ -5,10 +5,16 @@ class MilvusConan(ConanFile):
     keep_imports = True
     settings = "os", "compiler", "build_type", "arch"
 
-    # Force cmake tool as build-require.
-    build_requires = (
-        "cmake/3.30.5",
-    )
+    def build_requirements(self):
+        # The Linux x86_64 Nix clang+libc++ proof path already enters a shell with a
+        # current CMake. Pulling Conan's cmake tool-require there can poison loader
+        # resolution for host tools during source builds (for example grpc), because
+        # Conan 1 exports package OpenSSL/libcrypto directories via LD_LIBRARY_PATH.
+        # On older host glibc that makes cmake fail before configure starts.
+        use_nix_clang_libcxx = str(tools.get_env("MILVUS_NIX_CLANG_LIBCXX", "0")).upper()
+        if use_nix_clang_libcxx in ("1", "ON", "TRUE", "YES"):
+            return
+        self.build_requires("cmake/3.30.5")
 
     requires = (
         "rocksdb/6.29.5",
