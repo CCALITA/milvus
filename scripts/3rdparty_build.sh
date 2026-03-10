@@ -142,12 +142,16 @@ ensure_conan_supports_compiler_version() {
     return 0
   fi
 
-  conan_home="$(run_conan config home 2>/dev/null | tail -n1 | tr -d '\r')"
-  if [[ -z "${conan_home}" ]]; then
-    return 0
+  if [[ -n "${CONAN_USER_HOME:-}" ]] && [[ -f "${CONAN_USER_HOME}/.conan/settings.yml" ]]; then
+    settings_file="${CONAN_USER_HOME}/.conan/settings.yml"
+  else
+    conan_home="$(run_conan config home 2>/dev/null | grep -E '/\.conan$|\\.conan$' | tail -n1 | tr -d '\r')"
+    if [[ -z "${conan_home}" ]]; then
+      return 0
+    fi
+    settings_file="${conan_home}/settings.yml"
   fi
 
-  settings_file="${conan_home}/settings.yml"
   if [[ ! -f "${settings_file}" ]]; then
     return 0
   fi

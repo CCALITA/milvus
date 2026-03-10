@@ -79,7 +79,10 @@
           export ENABLE_AZURE_FS=OFF
           export ENABLE_AZURE_FS=OFF
 
-          export PATH="${llvmPkgs.clang}/bin:${llvmPkgs.lld}/bin:${llvmPkgs.llvm}/bin:$PATH"
+          export PATH="${pkgs.cmake}/bin:${pkgs.ninja}/bin:${pkgs.pkgconf}/bin:${llvmPkgs.clang}/bin:${llvmPkgs.lld}/bin:${llvmPkgs.llvm}/bin:$PATH"
+          if [ -d "$HOME/.local/bin" ]; then
+            export PATH="$HOME/.local/bin:$PATH"
+          fi
           export CC="${llvmPkgs.clang}/bin/clang"
           export CXX="${llvmPkgs.clang}/bin/clang++"
           export ASM="${llvmPkgs.clang}/bin/clang"
