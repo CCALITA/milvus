@@ -229,12 +229,21 @@ if [[ "${MILVUS_USE_GNU_CONFIG_OVERRIDE:-0}" == "1" ]] && [[ -f "${GNU_CONFIG_OV
 fi
 
 LIBAVROCPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libavrocpp/1.11.3"
+GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
 # Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
 # upstream recipe. Export a local recipe override that still uses public sources but
 # skips the unused avrogencpp/test-codegen executable path.
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBAVROCPP_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local libavrocpp/1.11.3@ override (skip avrogencpp/test-codegen on clang+libc++)"
   run_conan export "${LIBAVROCPP_OVERRIDE_DIR}" libavrocpp/1.11.3@
+fi
+# Under the same proof path, Conan's VirtualRunEnv can inject package OpenSSL/libcurl
+# directories that poison host-tool CMake startup for google-cloud-cpp. Export the local
+# recipe override so the CMake configure/build/install steps scrub loader vars while still
+# using public ConanCenter/package sources.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${GOOGLE_CLOUD_CPP_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local google-cloud-cpp/2.5.0@ override (sanitize loader env for Nix clang+libc++)"
+  run_conan export "${GOOGLE_CLOUD_CPP_OVERRIDE_DIR}" google-cloud-cpp/2.5.0@
 fi
 
 # Conan will use ConanCenter by default (no need for private remote)

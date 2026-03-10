@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 
 from conan import ConanFile
 from conan.tools.build import check_min_cppstd, cross_building
@@ -158,6 +159,10 @@ class GoogleCloudCppConan(ConanFile):
         # For the `grpc-cpp-plugin` executable, and indirectly `protoc`
         self.tool_requires("grpc/<host_version>")
 
+    def _using_nix_clang_libcxx(self):
+        value = str(os.getenv("MILVUS_NIX_CLANG_LIBCXX", "0")).upper()
+        return value in ("1", "ON", "TRUE", "YES")
+
     def generate(self):
         tc = CMakeToolchain(self)
         tc.variables["BUILD_TESTING"] = False
@@ -165,7 +170,12 @@ class GoogleCloudCppConan(ConanFile):
         tc.variables["GOOGLE_CLOUD_CPP_ENABLE_WERROR"] = False
         tc.variables["GOOGLE_CLOUD_CPP_ENABLE"] = ",".join(self._components())
         tc.generate()
-        VirtualRunEnv(self).generate(scope="build")
+        # Under the Nix clang+libc++ proof path, Conan's VirtualRunEnv can inject
+        # package OpenSSL/libcurl directories that break host-tool startup before
+        # google-cloud-cpp's CMake configure even begins. Skip it here and rely on
+        # the Conan toolchain/CMakeDeps metadata instead.
+        if not self._using_nix_clang_libcxx():
+            VirtualRunEnv(self).generate(scope="build")
         deps = CMakeDeps(self)
         deps.generate()
 
@@ -187,11 +197,45 @@ class GoogleCloudCppConan(ConanFile):
                                 "${Protobuf_PROTOC_EXECUTABLE} ARGS",
                                 '${CMAKE_COMMAND} -E env "DYLD_LIBRARY_PATH=$ENV{DYLD_LIBRARY_PATH}" ${Protobuf_PROTOC_EXECUTABLE} ARGS')
 
+    @contextmanager
+    def _sanitized_loader_env(self):
+        # Under the Linux x86_64 Nix clang+libc++ proof path, Conan's VirtualRunEnv can
+        # prepend package OpenSSL/libcurl dirs to LD_LIBRARY_PATH. That is useful for some
+        # runtime tools, but it can also poison host-tool CMake startup: the Nix-shell cmake
+        # binary links against Nix curl/OpenSSL, while Conan injects a different OpenSSL 3.1.x
+        # shared library set. Scrub loader env just for the cmake configure/build/install steps
+        # so host tools start in a consistent Nix world while the actual target dependency
+        # resolution still comes from the Conan toolchain/deps files.
+        use_nix_clang_libcxx = str(os.getenv("MILVUS_NIX_CLANG_LIBCXX", "0")).upper()
+        if use_nix_clang_libcxx not in ("1", "ON", "TRUE", "YES"):
+            yield
+            return
+
+        saved = {
+            key: os.environ.get(key)
+            for key in (
+                "LD_LIBRARY_PATH",
+                "DYLD_LIBRARY_PATH",
+                "DYLD_FALLBACK_LIBRARY_PATH",
+            )
+        }
+        try:
+            for key in saved:
+                os.environ.pop(key, None)
+            yield
+        finally:
+            for key, value in saved.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
+
     def build(self):
         self._patch_sources()
         cmake = CMake(self)
-        cmake.configure()
-        cmake.build()
+        with self._sanitized_loader_env():
+            cmake.configure()
+            cmake.build()
 
     def _generate_proto_requires(self, component):
         deps = self._PROTO_COMPONENT_DEPENDENCIES.get(self.version, dict())
@@ -235,7 +279,8 @@ class GoogleCloudCppConan(ConanFile):
     def package(self):
         copy(self, "LICENSE", src=self.source_folder, dst=os.path.join(self.package_folder, "licenses"))
         cmake = CMake(self)
-        cmake.install()
+        with self._sanitized_loader_env():
+            cmake.install()
         rmdir(self, path=os.path.join(self.package_folder, "lib", "cmake"))
         rmdir(self, path=os.path.join(self.package_folder, "lib", "pkgconfig"))
 
