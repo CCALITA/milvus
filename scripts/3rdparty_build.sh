@@ -164,18 +164,19 @@ settings_path = Path(sys.argv[1])
 compiler_name = sys.argv[2]
 compiler_version = sys.argv[3]
 lines = settings_path.read_text().splitlines()
-compiler_header = f"    {compiler_name}:"
+compiler_header = f"{compiler_name}:"
 
 in_block = False
 version_start = None
 version_end = None
 for i, line in enumerate(lines):
-    if line == compiler_header:
+    stripped = line.strip()
+    if stripped == compiler_header:
         in_block = True
         continue
-    if in_block and line.startswith("    ") and line.endswith(":") and not line.startswith("        "):
+    if in_block and line.startswith("    ") and stripped.endswith(":") and not line.startswith("        "):
         break
-    if in_block and line.startswith("        version:"):
+    if in_block and stripped.startswith("version:"):
         version_start = i
         version_end = i
         while version_end < len(lines) and "]" not in lines[version_end]:
@@ -230,6 +231,7 @@ fi
 
 LIBAVROCPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libavrocpp/1.11.3"
 GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
+OPENTELEMETRY_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/opentelemetry-cpp/1.9.1"
 # Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
 # upstream recipe. Export a local recipe override that still uses public sources but
 # skips the unused avrogencpp/test-codegen executable path.
@@ -244,6 +246,14 @@ fi
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${GOOGLE_CLOUD_CPP_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local google-cloud-cpp/2.5.0@ override (sanitize loader env for Nix clang+libc++)"
   run_conan export "${GOOGLE_CLOUD_CPP_OVERRIDE_DIR}" google-cloud-cpp/2.5.0@
+fi
+# opentelemetry-cpp hits the same host-tool loader poisoning during CMake startup when
+# Conan injects package OpenSSL/libcurl dirs into LD_LIBRARY_PATH. Keep the proof path on
+# public ConanCenter sources by exporting a local recipe override that skips VirtualRunEnv
+# and scrubs loader vars only around CMake configure/build/install.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${OPENTELEMETRY_CPP_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local opentelemetry-cpp/1.9.1@ override (sanitize loader env for Nix clang+libc++)"
+  run_conan export "${OPENTELEMETRY_CPP_OVERRIDE_DIR}" opentelemetry-cpp/1.9.1@
 fi
 
 # Conan will use ConanCenter by default (no need for private remote)
