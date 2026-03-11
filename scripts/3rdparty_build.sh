@@ -203,6 +203,52 @@ print(f"Patched {settings_path} to admit {compiler_name} {compiler_version}")
 PY
 }
 
+ensure_conan_profile_env() {
+  local profile_file="$1"
+  local key="$2"
+  local value="$3"
+
+  [[ -n "${profile_file}" && -f "${profile_file}" ]] || return 0
+  [[ -n "${key}" ]] || return 0
+
+  python3 - "${profile_file}" "${key}" "${value}" <<'PY'
+from pathlib import Path
+import sys
+
+profile_path = Path(sys.argv[1])
+key = sys.argv[2]
+value = sys.argv[3]
+lines = profile_path.read_text().splitlines()
+entry = f"{key}={value}"
+
+section_idx = None
+for i, line in enumerate(lines):
+    if line.strip() == "[env]":
+        section_idx = i
+        break
+
+if section_idx is None:
+    if lines and lines[-1].strip():
+        lines.append("")
+    lines.extend(["[env]", entry])
+else:
+    insert_at = len(lines)
+    for i in range(section_idx + 1, len(lines)):
+        stripped = lines[i].strip()
+        if stripped.startswith("[") and stripped.endswith("]"):
+            insert_at = i
+            break
+        if stripped.startswith(f"{key}="):
+            lines[i] = entry
+            break
+    else:
+        lines.insert(insert_at, entry)
+
+profile_path.write_text("\n".join(lines) + "\n")
+print(f"Updated {profile_path}: {entry}")
+PY
+}
+
 pushd ${BUILD_OUTPUT_DIR}
 
 export CONAN_REVISIONS_ENABLED=1
@@ -232,6 +278,7 @@ fi
 LIBAVROCPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libavrocpp/1.11.3"
 GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
 OPENTELEMETRY_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/opentelemetry-cpp/1.9.1"
+LIBSYSTEMD_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libsystemd/255"
 # Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
 # upstream recipe. Export a local recipe override that still uses public sources but
 # skips the unused avrogencpp/test-codegen executable path.
@@ -254,6 +301,14 @@ fi
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${OPENTELEMETRY_CPP_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local opentelemetry-cpp/1.9.1@ override (sanitize loader env for Nix clang+libc++)"
   run_conan export "${OPENTELEMETRY_CPP_OVERRIDE_DIR}" opentelemetry-cpp/1.9.1@
+fi
+# systemd 255's Conan recipe hard-fails when newer kernel headers expose filesystem
+# magic constants not yet mirrored in filesystems-gperf.gperf. For the Nix clang+libc++
+# proof path, keep using public sources but export a local recipe override that downgrades
+# that check to a warning so libsystemd can still build on newer Linux hosts.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBSYSTEMD_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local libsystemd/255@ override (ignore newer-kernel filesystem header drift)"
+  run_conan export "${LIBSYSTEMD_OVERRIDE_DIR}" libsystemd/255@
 fi
 
 # Conan will use ConanCenter by default (no need for private remote)
@@ -287,6 +342,25 @@ case "${unameOut}" in
       echo "Unable to locate a ${LINUX_COMPILER} compiler"
       exit 1
     fi
+    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
+      CONAN_COMPILER_WRAPPER_DIR="${BUILD_OUTPUT_DIR}/conan-compiler-wrap"
+      mkdir -p "${CONAN_COMPILER_WRAPPER_DIR}"
+      cat > "${CONAN_COMPILER_WRAPPER_DIR}/clang" <<EOF
+#!/usr/bin/env bash
+exec "${CC:-${LINUX_COMPILER_BIN}}" "\$@"
+EOF
+      cat > "${CONAN_COMPILER_WRAPPER_DIR}/clang++" <<EOF
+#!/usr/bin/env bash
+exec "${CXX:-${LINUX_COMPILER_BIN}}" "\$@"
+EOF
+      chmod +x "${CONAN_COMPILER_WRAPPER_DIR}/clang" "${CONAN_COMPILER_WRAPPER_DIR}/clang++"
+      ln -sf clang "${CONAN_COMPILER_WRAPPER_DIR}/clang-${MILVUS_CLANG_VERSION:-${LINUX_COMPILER_VERSION}}"
+      ln -sf clang++ "${CONAN_COMPILER_WRAPPER_DIR}/clang++-${MILVUS_CLANG_VERSION:-${LINUX_COMPILER_VERSION}}"
+      export PATH="${CONAN_COMPILER_WRAPPER_DIR}:$PATH"
+      echo "Conan compiler wrapper PATH head: ${CONAN_COMPILER_WRAPPER_DIR}"
+      echo "clang wrapper -> ${CC:-${LINUX_COMPILER_BIN}}"
+      echo "clang++ wrapper -> ${CXX:-${LINUX_COMPILER_BIN}}"
+    fi
     LINUX_COMPILER_VERSION="$(compiler_major_version "${LINUX_COMPILER_BIN}")"
     if [[ -z "${LINUX_COMPILER_VERSION}" ]]; then
       echo "Unable to determine ${LINUX_COMPILER} compiler version from ${LINUX_COMPILER_BIN}"
@@ -294,14 +368,31 @@ case "${unameOut}" in
     fi
     echo "Using Linux compiler: ${LINUX_COMPILER_BIN} (${LINUX_COMPILER} ${LINUX_COMPILER_VERSION})"
 
-    # Ensure a deterministic profile and avoid Conan using stale compiler settings
+    # Ensure a deterministic profile and avoid Conan using stale compiler settings.
+    # On a brand-new CONAN_USER_HOME under /export, Conan 1 may lazily create
+    # settings.yml only after a profile command touches the home. Prime that first,
+    # then patch in newer compiler majors (for example clang 18) before the install.
     run_conan profile new default --detect --force >/dev/null 2>&1 || true
+    run_conan profile show default >/dev/null 2>&1 || true
 
     if [[ "${LINUX_COMPILER}" == "clang" ]]; then
       ensure_conan_supports_compiler_version "clang" "${LINUX_COMPILER_VERSION}"
     fi
     run_conan profile update settings.compiler=${LINUX_COMPILER} default >/dev/null 2>&1 || true
     run_conan profile update settings.compiler.version=${LINUX_COMPILER_VERSION} default >/dev/null 2>&1 || true
+    CONAN_HOME_DIR="${CONAN_USER_HOME:-$HOME}/.conan"
+    DEFAULT_CONAN_PROFILE="${CONAN_HOME_DIR}/profiles/default"
+    if [[ -f "${DEFAULT_CONAN_PROFILE}" ]]; then
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CC "${CC:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CXX "${CXX:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CFLAGS "${CFLAGS:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CXXFLAGS "${CXXFLAGS:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CPPFLAGS "${CPPFLAGS:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" LDFLAGS "${LDFLAGS:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CPATH "${CPATH:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" CPLUS_INCLUDE_PATH "${CPLUS_INCLUDE_PATH:-}"
+      ensure_conan_profile_env "${DEFAULT_CONAN_PROFILE}" LIBRARY_PATH "${LIBRARY_PATH:-}"
+    fi
     LINUX_CLANG_STDLIB="${MILVUS_CLANG_STDLIB:-libstdc++11}"
     if [[ "${LINUX_COMPILER}" == "clang" ]]; then
       case "${LINUX_CLANG_STDLIB}" in
@@ -340,14 +431,6 @@ case "${unameOut}" in
       CONAN_BUILD_ARG="--build=*"
     fi
 
-    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
-      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=clang -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=${LINUX_CLANG_STDLIB} -s compiler.cppstd=20 || { echo 'conan install failed'; exit 1; }
-    elif [[ "${GCC_DEFAULT_LIBSTDCPP_ABI}" == "gcc4" ]]; then
-      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} || { echo 'conan install failed'; exit 1; }
-    else
-      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=libstdc++11 || { echo 'conan install failed'; exit 1; }
-    fi
-
     # Prefer Conan-provided CMake when we need a newer host toolchain CMake.
     # Under the Nix clang+libc++ proof path we default to the Nix shell's CMake so tools run
     # inside the same libc/OpenSSL world, but allow an explicit Conan-CMake override for cases
@@ -363,6 +446,37 @@ case "${unameOut}" in
     elif [[ -n "${CONAN_CMAKE_EXE}" ]]; then
       export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
       echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
+    fi
+
+    SELECTED_CMAKE="$(command -v cmake)"
+    if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+      BUILD_TOOL_LOADER_PATH="$(printf '%s' "${LD_LIBRARY_PATH:-}" | tr ':' '\n' | awk '/^\/nix\/store\// { print }' | paste -sd: -)"
+      CONAN_CMAKE_WRAPPER_DIR="${BUILD_OUTPUT_DIR}/conan-toolwrap"
+      CONAN_CMAKE_WRAPPER="${CONAN_CMAKE_WRAPPER_DIR}/cmake"
+      mkdir -p "${CONAN_CMAKE_WRAPPER_DIR}"
+      cat > "${CONAN_CMAKE_WRAPPER}" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+export LD_LIBRARY_PATH="${BUILD_TOOL_LOADER_PATH}"
+unset DYLD_LIBRARY_PATH
+exec "${SELECTED_CMAKE}" "\$@"
+EOF
+      chmod +x "${CONAN_CMAKE_WRAPPER}"
+      export PATH="${CONAN_CMAKE_WRAPPER_DIR}:${PATH}"
+      export CONAN_CMAKE_PROGRAM="${CONAN_CMAKE_WRAPPER}"
+      echo "Conan will invoke CMake via wrapper: ${CONAN_CMAKE_PROGRAM} -> ${SELECTED_CMAKE}"
+      echo "Wrapper LD_LIBRARY_PATH=${BUILD_TOOL_LOADER_PATH}"
+    else
+      export CONAN_CMAKE_PROGRAM="${SELECTED_CMAKE}"
+      echo "Conan will invoke CMake via: ${CONAN_CMAKE_PROGRAM}"
+    fi
+
+    if [[ "${LINUX_COMPILER}" == "clang" ]]; then
+      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=clang -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=${LINUX_CLANG_STDLIB} -s compiler.cppstd=20 || { echo 'conan install failed'; exit 1; }
+    elif [[ "${GCC_DEFAULT_LIBSTDCPP_ABI}" == "gcc4" ]]; then
+      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} || { echo 'conan install failed'; exit 1; }
+    else
+      run_conan install ${CPP_SRC_DIR} --install-folder conan ${CONAN_BUILD_ARG} -s build_type=${BUILD_TYPE} -s compiler=gcc -s compiler.version=${LINUX_COMPILER_VERSION} -s compiler.libcxx=libstdc++11 || { echo 'conan install failed'; exit 1; }
     fi
 
     # Fix Conan-generated FindAWSSDK.cmake: some CMakeLists use COMPONENTS core/s3/...
