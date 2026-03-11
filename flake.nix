@@ -44,6 +44,7 @@
           go
           gfortran
           gnumake
+          grpc
           ninja
           pkgconf
           protobuf

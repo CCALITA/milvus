@@ -240,6 +240,20 @@ class OpenTelemetryCppConan(ConanFile):
         value = str(os.getenv("MILVUS_NIX_CLANG_LIBCXX", "0")).upper()
         return value in ("1", "ON", "TRUE", "YES")
 
+    def _append_loader_dirs(self, dirs, seen, package_folder):
+        if not package_folder:
+            return
+        for subdir in ("lib", "lib64"):
+            candidate = os.path.join(package_folder, subdir)
+            if os.path.isdir(candidate) and candidate not in seen:
+                seen.add(candidate)
+                dirs.append(candidate)
+
+    def _conan_cache_package_folders(self, name):
+        conan_user_home = os.environ.get("CONAN_USER_HOME") or os.path.expanduser("~")
+        pattern = os.path.join(conan_user_home, ".conan", "data", name, "*", "_", "_", "package", "*")
+        return sorted(glob.glob(pattern))
+
     def _nix_build_tool_loader_paths(self):
         # Keep build-tool runtimes available after scrubbing the broader Conan loader
         # environment. grpc_cpp_plugin/protoc live in build requirements and need their
@@ -249,14 +263,14 @@ class OpenTelemetryCppConan(ConanFile):
         dirs = []
         seen = set()
         for dep in self.dependencies.build.values():
-            package_folder = getattr(dep, "package_folder", None)
-            if not package_folder:
-                continue
-            for subdir in ("lib", "lib64"):
-                candidate = os.path.join(package_folder, subdir)
-                if os.path.isdir(candidate) and candidate not in seen:
-                    seen.add(candidate)
-                    dirs.append(candidate)
+            self._append_loader_dirs(dirs, seen, getattr(dep, "package_folder", None))
+
+        # Conan 1/2 dependency views are inconsistent for tool_requires under this proof
+        # path, so also fall back to the cache for the concrete build tools that the
+        # wrapper/build steps execute directly.
+        for package_name in ("grpc", "protobuf"):
+            for package_folder in self._conan_cache_package_folders(package_name):
+                self._append_loader_dirs(dirs, seen, package_folder)
         return dirs
 
     def _nix_runtime_loader_paths(self):
@@ -307,18 +321,12 @@ class OpenTelemetryCppConan(ConanFile):
             raise ConanInvalidConfiguration("gRPC grpc_cpp_plugin binary not found in Conan cache")
 
         grpc_cpp_plugin = grpc_candidates[-1]
-        save(
-            self,
-            wrapper,
-            textwrap.dedent(
-                f"""\
-                #!/usr/bin/env bash
-                set -euo pipefail
-                export LD_LIBRARY_PATH={quoted_loader_path}
-                exec {grpc_cpp_plugin} "$@"
-                """
-            ),
-        )
+        wrapper_contents = "#!/usr/bin/env bash\nset -euo pipefail\n"
+        if quoted_loader_path:
+            wrapper_contents += f"export LD_LIBRARY_PATH={quoted_loader_path}\n"
+        wrapper_contents += f'exec {grpc_cpp_plugin} "$@"\n'
+
+        save(self, wrapper, wrapper_contents)
         os.chmod(wrapper, 0o755)
         return wrapper
 
