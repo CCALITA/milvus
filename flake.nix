@@ -12,6 +12,7 @@
       lib = pkgs.lib;
       llvmPkgs = pkgs.llvmPackages_18;
       pythonEnv = pkgs.python311.withPackages (ps: with ps; [
+        jinja2
         pip
         setuptools
         wheel
