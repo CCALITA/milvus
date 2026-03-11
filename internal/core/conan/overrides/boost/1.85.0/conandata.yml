@@ -1,0 +1,15 @@
+patches:
+  1.85.0:
+  - patch_description: Optional flag to specify iconv from either libc of libiconv
+    patch_file: patches/1.82.0-locale-iconv-library-option.patch
+    patch_type: conan
+  - patch_description: Fix aliasing violation in boost::container
+    patch_file: patches/1.85.0-container-aliasing-violation-fix.patch
+    patch_source: https://github.com/boostorg/container/commit/20ad12f20e661978e90dc7f36d8ab8ac05e5a5a9
+    patch_type: official
+sources:
+  1.85.0:
+    sha256: 7009fe1faa1697476bdc7027703a2badb84e849b7b0baad5086b087b971f8617
+    url:
+    - https://boostorg.jfrog.io/artifactory/main/release/1.85.0/source/boost_1_85_0.tar.bz2
+    - https://sourceforge.net/projects/boost/files/boost/1.85.0/boost_1_85_0.tar.bz2

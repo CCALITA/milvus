@@ -82,7 +82,7 @@ ParsePksFromFieldData(std::vector<PkType>& pks, const DataArray& data) {
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported PK {}", data_type));
+                      fmt::format("unsupported PK {}", GetDataTypeName(data_type)));
         }
     }
 }
@@ -112,7 +112,7 @@ ParsePksFromFieldData(DataType data_type,
             }
             default: {
                 ThrowInfo(DataTypeInvalid,
-                          fmt::format("unsupported PK {}", data_type));
+                          fmt::format("unsupported PK {}", GetDataTypeName(data_type)));
             }
         }
         offset += row_count;
@@ -137,7 +137,7 @@ ParsePksFromIDs(std::vector<PkType>& pks,
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported PK {}", data_type));
+                      fmt::format("unsupported PK {}", GetDataTypeName(data_type)));
         }
     }
 }
@@ -308,7 +308,8 @@ GetRawDataSizeOfDataArray(const DataArray* data,
             default: {
                 ThrowInfo(
                     DataTypeInvalid,
-                    fmt::format("unsupported variable datatype {}", data_type));
+                    fmt::format("unsupported variable datatype {}",
+                                GetDataTypeName(data_type)));
             }
         }
     }
@@ -436,7 +437,7 @@ SetUpScalarFieldData(milvus::proto::schema::ScalarField*& scalar_array,
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported datatype {}", data_type));
+                      fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
         }
     }
 }
@@ -504,7 +505,7 @@ CreateEmptyVectorDataArray(int64_t count, const FieldMeta& field_meta) {
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported datatype {}", data_type));
+                      fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
         }
     }
     return data_array;
@@ -636,7 +637,7 @@ CreateScalarDataArrayFrom(const void* data_raw,
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported datatype {}", data_type));
+                      fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
         }
     }
 
@@ -751,7 +752,7 @@ CreateVectorDataArrayFrom(const void* data_raw,
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported datatype {}", data_type));
+                      fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
         }
     }
     return data_array;
@@ -873,7 +874,7 @@ MergeDataArray(std::vector<MergeBase>& merge_bases,
                 *(obj->mutable_data()->Add()) = data.data(physical_offset);
             } else {
                 ThrowInfo(DataTypeInvalid,
-                          fmt::format("unsupported datatype {}", data_type));
+                          fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
             }
             continue;
         }
@@ -955,7 +956,7 @@ MergeDataArray(std::vector<MergeBase>& merge_bases,
             }
             default: {
                 ThrowInfo(DataTypeInvalid,
-                          fmt::format("unsupported datatype {}", data_type));
+                          fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
             }
         }
     }
@@ -1183,7 +1184,7 @@ ReverseDataFromIndex(const index::IndexBase* index,
         }
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("unsupported datatype {}", data_type));
+                      fmt::format("unsupported datatype {}", GetDataTypeName(data_type)));
         }
     }
 

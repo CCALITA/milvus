@@ -136,33 +136,64 @@ compiler_major_version() {
 ensure_conan_supports_compiler_version() {
   local compiler_name="$1"
   local compiler_version="$2"
-  local conan_home settings_file
+  local conan_home settings_file conan_python
 
-  if ! command -v python3 >/dev/null 2>&1; then
-    return 0
-  fi
-
-  if [[ -n "${CONAN_USER_HOME:-}" ]] && [[ -f "${CONAN_USER_HOME}/.conan/settings.yml" ]]; then
-    settings_file="${CONAN_USER_HOME}/.conan/settings.yml"
+  if [[ -n "${CONAN_USER_HOME:-}" ]]; then
+    conan_home="${CONAN_USER_HOME}/.conan"
   else
     conan_home="$(run_conan config home 2>/dev/null | grep -E '/\.conan$|\\.conan$' | tail -n1 | tr -d '\r')"
     if [[ -z "${conan_home}" ]]; then
       return 0
     fi
-    settings_file="${conan_home}/settings.yml"
   fi
+  settings_file="${conan_home}/settings.yml"
 
-  if [[ ! -f "${settings_file}" ]]; then
+  conan_python="$(python3 - <<'PY'
+from pathlib import Path
+import os
+import sys
+
+conan_path = os.popen('command -v conan').read().strip()
+if not conan_path:
+    sys.exit(0)
+try:
+    first = Path(conan_path).read_text().splitlines()[0]
+except Exception:
+    first = ''
+if first.startswith('#!'):
+    print(first[2:].strip())
+PY
+)"
+  if [[ -z "${conan_python}" ]]; then
+    conan_python="$(command -v python3 || true)"
+  fi
+  if [[ -z "${conan_python}" ]]; then
     return 0
   fi
 
-  python3 - "${settings_file}" "${compiler_name}" "${compiler_version}" <<'PY'
+  "${conan_python}" - "${settings_file}" "${compiler_name}" "${compiler_version}" <<'PY'
 from pathlib import Path
+import importlib
 import sys
 
 settings_path = Path(sys.argv[1])
 compiler_name = sys.argv[2]
 compiler_version = sys.argv[3]
+settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+if not settings_path.exists():
+    try:
+        conans = importlib.import_module("conans")
+        migrations = importlib.import_module("conans.client.migrations_settings")
+        version_key = f"settings_{conans.__version__.replace('.', '_')}"
+        default_settings = getattr(migrations, version_key)
+    except Exception:
+        default_settings = None
+    if not default_settings:
+        sys.exit(0)
+    settings_path.write_text(default_settings if default_settings.endswith("\n") else default_settings + "\n")
+    print(f"Seeded {settings_path} from Conan defaults")
+
 lines = settings_path.read_text().splitlines()
 compiler_header = f"{compiler_name}:"
 
@@ -276,6 +307,7 @@ if [[ "${MILVUS_USE_GNU_CONFIG_OVERRIDE:-0}" == "1" ]] && [[ -f "${GNU_CONFIG_OV
 fi
 
 LIBAVROCPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libavrocpp/1.11.3"
+BOOST_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/boost/1.85.0"
 GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
 OPENTELEMETRY_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/opentelemetry-cpp/1.9.1"
 LIBSYSTEMD_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libsystemd/255"
@@ -285,6 +317,14 @@ LIBSYSTEMD_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libsystemd/255"
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBAVROCPP_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local libavrocpp/1.11.3@ override (skip avrogencpp/test-codegen on clang+libc++)"
   run_conan export "${LIBAVROCPP_OVERRIDE_DIR}" libavrocpp/1.11.3@
+fi
+# boost/1.85.0's default ConanCenter recipe only forwards -stdlib=libc++ to b2.
+# Under the Nix proof shell that still lets GCC libstdc++ headers leak in, so export a
+# local override that additionally forwards the libc++ header/library flags while keeping
+# public ConanCenter sources.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${BOOST_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local boost/1.85.0@ override (forward Nix libc++ header/link flags to b2)"
+  run_conan export "${BOOST_OVERRIDE_DIR}" boost/1.85.0@
 fi
 # Under the same proof path, Conan's VirtualRunEnv can inject package OpenSSL/libcurl
 # directories that poison host-tool CMake startup for google-cloud-cpp. Export the local
