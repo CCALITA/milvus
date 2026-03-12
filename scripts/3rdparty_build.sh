@@ -311,6 +311,7 @@ BOOST_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/boost/1.85.0"
 GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
 OPENTELEMETRY_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/opentelemetry-cpp/1.9.1"
 LIBIBERTY_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libiberty/9.1.0"
+LIBXCRYPT_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libxcrypt/4.4.36"
 LIBSYSTEMD_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libsystemd/255"
 # Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
 # upstream recipe. Export a local recipe override that still uses public sources but
@@ -350,6 +351,14 @@ fi
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBIBERTY_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local libiberty/9.1.0@ override (prefer ftpmirror.gnu.org over ftp.gnu.org)"
   run_conan export "${LIBIBERTY_OVERRIDE_DIR}" libiberty/9.1.0@
+fi
+# libxcrypt/4.4.36's ConanCenter recipe removes pkgconfig files but can leave a broken
+# top-level libcrypt.pc symlink behind, which aborts Conan 1.64 packaging on Linux.
+# Keep the proof path on the same public source tarball by exporting a local recipe override
+# that removes the stray symlink after install.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBXCRYPT_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local libxcrypt/4.4.36@ override (drop broken libcrypt.pc symlink)"
+  run_conan export "${LIBXCRYPT_OVERRIDE_DIR}" libxcrypt/4.4.36@
 fi
 # systemd 255's Conan recipe hard-fails when newer kernel headers expose filesystem
 # magic constants not yet mirrored in filesystems-gperf.gperf. For the Nix clang+libc++
