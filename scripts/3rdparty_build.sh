@@ -310,6 +310,7 @@ LIBAVROCPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libavrocpp/1.11.3"
 BOOST_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/boost/1.85.0"
 GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
 OPENTELEMETRY_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/opentelemetry-cpp/1.9.1"
+LIBIBERTY_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libiberty/9.1.0"
 LIBSYSTEMD_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libsystemd/255"
 # Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
 # upstream recipe. Export a local recipe override that still uses public sources but
@@ -341,6 +342,14 @@ fi
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${OPENTELEMETRY_CPP_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local opentelemetry-cpp/1.9.1@ override (sanitize loader env for Nix clang+libc++)"
   run_conan export "${OPENTELEMETRY_CPP_OVERRIDE_DIR}" opentelemetry-cpp/1.9.1@
+fi
+# libiberty/9.1.0's default ConanCenter recipe hardcodes ftp.gnu.org, which is unreliable
+# through the laptop-backed proxy path used on the Linux proof host. Keep the proof path on
+# public GNU sources by exporting a local recipe override that prefers ftpmirror.gnu.org and
+# falls back to the canonical ftp.gnu.org URL with the same tarball checksum.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBIBERTY_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local libiberty/9.1.0@ override (prefer ftpmirror.gnu.org over ftp.gnu.org)"
+  run_conan export "${LIBIBERTY_OVERRIDE_DIR}" libiberty/9.1.0@
 fi
 # systemd 255's Conan recipe hard-fails when newer kernel headers expose filesystem
 # magic constants not yet mirrored in filesystems-gperf.gperf. For the Nix clang+libc++
