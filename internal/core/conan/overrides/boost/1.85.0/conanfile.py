@@ -1488,7 +1488,7 @@ class BoostConan(ConanFile):
 
     @property
     def _ar(self):
-        ar = VirtualBuildEnv(self).vars().get("AR")
+        ar = os.getenv("AR") or VirtualBuildEnv(self).vars().get("AR")
         if ar:
             return ar
         if is_apple_os(self) and self.settings.compiler == "apple-clang":
@@ -1497,7 +1497,7 @@ class BoostConan(ConanFile):
 
     @property
     def _ranlib(self):
-        ranlib = VirtualBuildEnv(self).vars().get("RANLIB")
+        ranlib = os.getenv("RANLIB") or VirtualBuildEnv(self).vars().get("RANLIB")
         if ranlib:
             return ranlib
         if is_apple_os(self) and self.settings.compiler == "apple-clang":
@@ -1507,7 +1507,7 @@ class BoostConan(ConanFile):
     @property
     def _cxx(self):
         compilers_by_conf = self.conf.get("tools.build:compiler_executables", default={}, check_type=dict)
-        cxx = compilers_by_conf.get("cpp") or VirtualBuildEnv(self).vars().get("CXX")
+        cxx = os.getenv("CXX") or compilers_by_conf.get("cpp") or VirtualBuildEnv(self).vars().get("CXX")
         if cxx:
             return cxx
         if is_apple_os(self) and self.settings.compiler == "apple-clang":
@@ -1578,12 +1578,27 @@ class BoostConan(ConanFile):
         if self._ranlib:
             ranlib_path = self._ranlib.replace("\\", "/")
             contents += f'<ranlib>"{ranlib_path}" '
-        cxxflags = " ".join(self.conf.get("tools.build:cxxflags", default=[], check_type=list)) + " "
-        cflags = " ".join(self.conf.get("tools.build:cflags", default=[], check_type=list)) + " "
+        cxxflags = " ".join(filter(None, [
+            " ".join(self.conf.get("tools.build:cxxflags", default=[], check_type=list)),
+            os.getenv("CXXFLAGS", ""),
+        ])) + " "
+        cflags = " ".join(filter(None, [
+            " ".join(self.conf.get("tools.build:cflags", default=[], check_type=list)),
+            os.getenv("CFLAGS", ""),
+        ])) + " "
         buildenv_vars = VirtualBuildEnv(self).vars()
-        cppflags = buildenv_vars.get("CPPFLAGS", "") + " "
-        ldflags = " ".join(self.conf.get("tools.build:sharedlinkflags", default=[], check_type=list)) + " "
-        asflags = buildenv_vars.get("ASFLAGS", "") + " "
+        cppflags = " ".join(filter(None, [
+            buildenv_vars.get("CPPFLAGS", ""),
+            os.getenv("CPPFLAGS", ""),
+        ])) + " "
+        ldflags = " ".join(filter(None, [
+            " ".join(self.conf.get("tools.build:sharedlinkflags", default=[], check_type=list)),
+            os.getenv("LDFLAGS", ""),
+        ])) + " "
+        asflags = " ".join(filter(None, [
+            buildenv_vars.get("ASFLAGS", ""),
+            os.getenv("ASFLAGS", ""),
+        ])) + " "
 
         sysroot = self.conf.get("tools.build:sysroot")
         if sysroot and not is_msvc(self):
