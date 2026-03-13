@@ -311,6 +311,7 @@ BOOST_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/boost/1.85.0"
 GOOGLE_CLOUD_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/google-cloud-cpp/2.5.0"
 OPENTELEMETRY_CPP_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/opentelemetry-cpp/1.9.1"
 LIBIBERTY_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libiberty/9.1.0"
+BISON_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/bison/3.8.2"
 LIBXCRYPT_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libxcrypt/4.4.36"
 LIBSYSTEMD_OVERRIDE_DIR="${CPP_SRC_DIR}/conan/overrides/libsystemd/255"
 # Linux clang+libc++ currently hits a non-library avrogencpp/Boost ABI failure in the
@@ -351,6 +352,13 @@ fi
 if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${LIBIBERTY_OVERRIDE_DIR}/conanfile.py" ]]; then
   echo "Exporting local libiberty/9.1.0@ override (prefer ftpmirror.gnu.org over ftp.gnu.org)"
   run_conan export "${LIBIBERTY_OVERRIDE_DIR}" libiberty/9.1.0@
+fi
+# bison/3.8.2 hits the same ftp.gnu.org proxy failure on the Linux proof host. Keep the
+# proof path on public GNU sources by exporting a local recipe override that prefers public
+# mirrors first and only falls back to the canonical ftp.gnu.org URL.
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]] && [[ -f "${BISON_OVERRIDE_DIR}/conanfile.py" ]]; then
+  echo "Exporting local bison/3.8.2@ override (prefer mirrors over ftp.gnu.org)"
+  run_conan export "${BISON_OVERRIDE_DIR}" bison/3.8.2@
 fi
 # libxcrypt/4.4.36's ConanCenter recipe removes pkgconfig files but can leave a broken
 # top-level libcrypt.pc symlink behind, which aborts Conan 1.64 packaging on Linux.
