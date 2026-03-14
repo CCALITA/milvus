@@ -74,6 +74,24 @@ class LibxcryptConan(ConanFile):
 
     def build(self):
         self._patch_sources()
+        libtool_pkg = self.dependencies.build["libtool"].package_folder
+        libtool_res_dir = os.path.join(libtool_pkg, "res")
+        libtool_datadir = os.path.join(libtool_res_dir, "libtool")
+        aclocal_dir = os.path.join(libtool_res_dir, "aclocal")
+        libtool_shim_dir = os.path.join(self.build_folder, ".libtool-share")
+        os.makedirs(libtool_shim_dir, exist_ok=True)
+        for name, target in {
+            "build-aux": os.path.join(libtool_datadir, "build-aux"),
+            "libltdl": os.path.join(libtool_datadir, "libltdl"),
+            "m4": aclocal_dir,
+        }.items():
+            link_path = os.path.join(libtool_shim_dir, name)
+            if os.path.lexists(link_path):
+                os.unlink(link_path)
+            os.symlink(target, link_path)
+        os.environ["_lt_pkgdatadir"] = libtool_shim_dir
+        os.environ["ACLOCAL_PATH"] = os.pathsep.join(filter(None, [aclocal_dir, os.environ.get("ACLOCAL_PATH", "")]))
+        os.environ["AUTOMAKE_CONAN_INCLUDES"] = os.pathsep.join(filter(None, [aclocal_dir, os.environ.get("AUTOMAKE_CONAN_INCLUDES", "")]))
         autotools = Autotools(self)
         autotools.autoreconf()
         autotools.configure()
