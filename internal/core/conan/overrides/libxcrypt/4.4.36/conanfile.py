@@ -1,7 +1,7 @@
 from conan import ConanFile
 from conan.errors import ConanInvalidConfiguration
 from conan.tools.apple import fix_apple_shared_install_name
-from conan.tools.env import VirtualBuildEnv
+from conan.tools.env import Environment, VirtualBuildEnv
 from conan.tools.files import copy, get, replace_in_file, rm, rmdir
 from conan.tools.gnu import Autotools, AutotoolsToolchain
 from conan.tools.layout import basic_layout
@@ -75,6 +75,7 @@ class LibxcryptConan(ConanFile):
     def build(self):
         self._patch_sources()
         libtool_pkg = self.dependencies.build["libtool"].package_folder
+        libtool_bin_dir = os.path.join(libtool_pkg, "bin")
         libtool_res_dir = os.path.join(libtool_pkg, "res")
         libtool_datadir = os.path.join(libtool_res_dir, "libtool")
         aclocal_dir = os.path.join(libtool_res_dir, "aclocal")
@@ -89,15 +90,31 @@ class LibxcryptConan(ConanFile):
             if os.path.lexists(link_path):
                 os.unlink(link_path)
             os.symlink(target, link_path)
-        os.environ["_lt_pkgdatadir"] = libtool_shim_dir
-        os.environ["ACLOCAL_PATH"] = os.pathsep.join(filter(None, [aclocal_dir, os.environ.get("ACLOCAL_PATH", "")]))
-        os.environ["AUTOMAKE_CONAN_INCLUDES"] = os.pathsep.join(filter(None, [aclocal_dir, os.environ.get("AUTOMAKE_CONAN_INCLUDES", "")]))
+
+        toolwrap_dir = os.path.join(self.build_folder, ".toolwrap")
+        os.makedirs(toolwrap_dir, exist_ok=True)
+        libtoolize_real = os.path.join(libtool_bin_dir, "libtoolize")
+        libtoolize_wrapper = os.path.join(toolwrap_dir, "libtoolize")
+        with open(libtoolize_wrapper, "w", encoding="utf-8") as f:
+            f.write("#!/usr/bin/env bash\n")
+            f.write("export _lt_pkgdatadir=\"{}\"\n".format(libtool_shim_dir))
+            f.write("exec \"{}\" \"$@\"\n".format(libtoolize_real))
+        os.chmod(libtoolize_wrapper, 0o755)
+
+        env = Environment()
+        env.prepend_path("PATH", toolwrap_dir)
+        env.append_path("ACLOCAL_PATH", aclocal_dir)
+        env.append_path("AUTOMAKE_CONAN_INCLUDES", aclocal_dir)
+        env.define("_lt_pkgdatadir", libtool_shim_dir)
+        build_env = env.vars(self)
+
         autotools = Autotools(self)
-        autotools.autoreconf()
-        autotools.configure()
-        if self.settings.os == "Windows":
-            replace_in_file(self, os.path.join(self.build_folder, "libtool"), "-DPIC", "")
-        autotools.make()
+        with build_env.apply():
+            autotools.autoreconf()
+            autotools.configure()
+            if self.settings.os == "Windows":
+                replace_in_file(self, os.path.join(self.build_folder, "libtool"), "-DPIC", "")
+            autotools.make()
 
     def package(self):
         copy(self, "COPYING.LIB", src=self.source_folder, dst=os.path.join(self.package_folder, "licenses"))

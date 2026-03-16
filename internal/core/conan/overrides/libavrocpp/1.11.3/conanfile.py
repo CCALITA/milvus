@@ -95,6 +95,12 @@ class LibavrocppConan(ConanFile):
         cmake = CMake(self)
         cmake.install()
 
+        lib_dst = os.path.join(self.package_folder, "lib")
+        copy(self, pattern="libavrocpp*.a", dst=lib_dst, src=self.build_folder, keep_path=False)
+        copy(self, pattern="libavrocpp*.so*", dst=lib_dst, src=self.build_folder, keep_path=False)
+        copy(self, pattern="avrocpp*.lib", dst=lib_dst, src=self.build_folder, keep_path=False)
+        copy(self, pattern="avrocpp*.dll", dst=os.path.join(self.package_folder, "bin"), src=self.build_folder, keep_path=False)
+
         if self.settings.os == "Windows":
             for dll_pattern_to_remove in ["concrt*.dll", "msvcp*.dll", "vcruntime*.dll"]:
                 rm(self, dll_pattern_to_remove, os.path.join(self.package_folder, "bin"))

@@ -44,43 +44,18 @@ add_custom_command(
         VERBATIM
 )
 
-# Set the installed library path
-set(INSTALLED_LIB_FILE "${TANTIVY_LIB_DIR}/${TANTIVY_NAME}")
-
-# Install tantivy library and headers to output directory
-# This custom command produces the installed library file
-add_custom_command(
-        OUTPUT ${INSTALLED_LIB_FILE}
-        COMMENT "Installing tantivy binding to ${TANTIVY_LIB_DIR}"
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${TANTIVY_LIB_DIR}
-        COMMAND ${CMAKE_COMMAND} -E make_directory ${TANTIVY_INCLUDE_DIR}
-        COMMAND ${CMAKE_COMMAND} -E copy ${LIB_FILE} ${TANTIVY_LIB_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${LIB_HEADER_FOLDER}/tantivy-binding.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tantivy-wrapper.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/rust-binding.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/rust-array.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/rust-hashmap.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/tokenizer.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/token-stream.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/phrase_match.h ${TANTIVY_INCLUDE_DIR}/
-        COMMAND ${CMAKE_COMMAND} -E copy ${CMAKE_CURRENT_SOURCE_DIR}/time_recorder.h ${TANTIVY_INCLUDE_DIR}/
-        DEPENDS ${LIB_FILE}
-        VERBATIM
-)
-
-# Create a target that other targets can depend on
-add_custom_target(install_tantivy_target DEPENDS ${INSTALLED_LIB_FILE})
+add_custom_target(tantivy_binding_build DEPENDS ${LIB_FILE})
 
 add_library(tantivy_binding STATIC IMPORTED)
 add_dependencies(tantivy_binding
-        install_tantivy_target
+        tantivy_binding_build
         )
 
 set_target_properties(tantivy_binding
         PROPERTIES
         IMPORTED_GLOBAL TRUE
-        IMPORTED_LOCATION "${TANTIVY_LIB_DIR}/${TANTIVY_NAME}"
-        INTERFACE_INCLUDE_DIRECTORIES "${CMAKE_INSTALL_PREFIX}/include")
+        IMPORTED_LOCATION "${LIB_FILE}"
+        INTERFACE_INCLUDE_DIRECTORIES "${LIB_HEADER_FOLDER};${CMAKE_CURRENT_SOURCE_DIR}")
 
 if (CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_options(-fno-stack-protector -fno-omit-frame-pointer -fno-var-tracking -fsanitize=address)

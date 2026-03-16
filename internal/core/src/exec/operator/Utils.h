@@ -98,9 +98,10 @@ PrepareVectorIteratorsFromIndex(const SearchInfo& search_info,
                 e.what(),
                 operator_type);
             ThrowInfo(ErrorCode::Unsupported,
-                      fmt::format("Failed to {}, current index:" +
-                                      index.GetIndexType() + " doesn't support",
-                                  operator_type));
+                      fmt::format(
+                          "Failed to {}, current index:{} doesn't support",
+                          operator_type,
+                          index.GetIndexType()));
         }
         return true;
     }

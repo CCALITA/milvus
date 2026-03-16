@@ -12,13 +12,15 @@ export HTTPS_PROXY=http://127.0.0.1:18123
 export no_proxy=127.0.0.1,localhost
 export NO_PROXY=127.0.0.1,localhost
 export NIX_CONFIG='experimental-features = nix-command flakes'
+export MILVUS_NIX_STORE_ROOT=${MILVUS_NIX_STORE_ROOT:-/export/nix-alt}
+export MILVUS_NIX_STORE_URL=${MILVUS_NIX_STORE_URL:-local?root=${MILVUS_NIX_STORE_ROOT}}
 export CONAN_USER_HOME=/export/conan-home/milvus
 export CONAN_HOME=/export/.cache/conan
 export XDG_CACHE_HOME=/export/.cache
 export TMPDIR=/export/tmp
-mkdir -p /export/tmp /export/build-logs /export/.cache/conan /export/conan-home/milvus
+mkdir -p /export/tmp /export/build-logs /export/.cache/conan /export/conan-home/milvus "${MILVUS_NIX_STORE_ROOT}"
 source /export/venvs/milvus-conan1/bin/activate
-nix develop .#linux-clang-libcxx --command bash -lc '
+nix --store "${MILVUS_NIX_STORE_URL}" develop .#linux-clang-libcxx --command bash -c '
   set -euo pipefail
   echo ==toolchain==
   echo CC=$CC

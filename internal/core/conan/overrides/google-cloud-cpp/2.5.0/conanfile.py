@@ -296,6 +296,10 @@ class GoogleCloudCppConan(ConanFile):
         self.cpp_info.components[component].names["pkg_config"] = f"google_cloud_cpp_{component}"
 
     def package_info(self):
+        # Milvus only builds and links the storage path from this override.
+        # Keep the exported CMake/Conan metadata aligned with the actually
+        # packaged libraries so consumers do not inherit link flags for hundreds
+        # of gRPC/proto libraries that are intentionally not built here.
         self.cpp_info.components["common"].requires = ["abseil::absl_any", "abseil::absl_flat_hash_map", "abseil::absl_memory", "abseil::absl_optional", "abseil::absl_time"]
         self.cpp_info.components["common"].libs = ["google_cloud_cpp_common"]
         self.cpp_info.components["common"].names["pkg_config"] = "google_cloud_cpp_common"
@@ -303,81 +307,6 @@ class GoogleCloudCppConan(ConanFile):
         self.cpp_info.components["rest_internal"].requires = ["common", "libcurl::libcurl", "openssl::ssl", "openssl::crypto", "zlib::zlib"]
         self.cpp_info.components["rest_internal"].libs = ["google_cloud_cpp_rest_internal"]
         self.cpp_info.components["rest_internal"].names["pkg_config"] = "google_cloud_cpp_common"
-
-        # A small number of gRPC-generated stubs are used directly in the common components
-        # shared by all gRPC-based libraries.  These must be defined without reference to `grpc_utils`.
-        if Version(self.version) >= '2.15.1':
-            GRPC_UTILS_REQUIRED_PROTOS = {
-                "iam_credentials_v1_iamcredentials_protos",
-                "iam_v1_policy_protos",
-                "longrunning_operations_protos",
-                "rpc_error_details_protos",
-                "rpc_status_protos",
-            }
-        else:
-            GRPC_UTILS_REQUIRED_PROTOS = {
-                "iam_protos",
-                "longrunning_operations_protos",
-                "rpc_error_details_protos",
-                "rpc_status_protos",
-            }
-        for component in GRPC_UTILS_REQUIRED_PROTOS:
-            self._add_proto_component(component)
-
-        self.cpp_info.components["grpc_utils"].requires = list(GRPC_UTILS_REQUIRED_PROTOS) + ["common", "abseil::absl_function_ref", "abseil::absl_memory", "abseil::absl_time", "grpc::grpc++", "grpc::_grpc"]
-        self.cpp_info.components["grpc_utils"].libs = ["google_cloud_cpp_grpc_utils"]
-        self.cpp_info.components["grpc_utils"].names["pkg_config"] = "google_cloud_cpp_grpc_utils"
-
-        for component in self._proto_components():
-            if Version(self.version) >= '2.15.1' and component == 'storage_protos':
-                # Starting with v2.15.1 the `storage_protos` are compiled only
-                # when needed. They are not used in Conan because they are only
-                # needed for an experimental library, supporting an allow-listed
-                # service.
-                continue
-            if component not in GRPC_UTILS_REQUIRED_PROTOS:
-                self._add_proto_component(component)
-
-        # Interface libraries for backwards compatibility
-        if Version(self.version) < '2.15.1':
-            self.cpp_info.components["dialogflow_es_protos"].requires = ["cloud_dialogflow_v2_protos"]
-            self.cpp_info.components["logging_type_protos"].requires = ["logging_type_type_protos"]
-            self.cpp_info.components["speech_protos"].requires = ["cloud_speech_protos"]
-            self.cpp_info.components["texttospeech_protos"].requires = ["cloud_texttospeech_protos"]
-            self.cpp_info.components["trace_protos"].requires = [
-                "devtools_cloudtrace_v2_trace_protos",
-                "devtools_cloudtrace_v2_tracing_protos",
-            ]
-            self._add_grpc_component("bigquery", "cloud_bigquery_protos")
-        else:
-            self.cpp_info.components["cloud_bigquery_protos"].requires = ["bigquery_protos"]
-            self.cpp_info.components["cloud_dialogflow_v2_protos"].requires = ["dialogflow_es_protos"]
-            self.cpp_info.components["cloud_speech_protos"].requires = ["speech_protos"]
-            self.cpp_info.components["cloud_texttospeech_protos"].requires = ["texttospeech_protos"]
-            self.cpp_info.components["devtools_cloudtrace_v2_trace_protos"].requires = ["trace_protos"]
-            self.cpp_info.components["devtools_cloudtrace_v2_tracing_protos"].requires = ["trace_protos"]
-            self.cpp_info.components["logging_type_type_protos"].requires = ["logging_type_protos"]
-
-        for component in self._components():
-            protos=f"{component}_protos"
-            # bigquery proto library predates the adoption of more consistent naming
-            if component == 'bigquery' and Version(self.version) < '2.15.1':
-                self._add_proto_component("cloud_bigquery_protos")
-                self._add_grpc_component(component, "cloud_bigquery_protos")
-                continue
-            if component == 'dialogflow_es' and Version(self.version) < '2.15.1':
-                self._add_proto_component("cloud_dialogflow_v2_protos")
-                self._add_grpc_component(component, "cloud_dialogflow_v2_protos")
-                continue
-            # `storage` is the only component that does not depend on a matching `*_protos` library
-            if component in self._REQUIRES_CUSTOM_DEPENDENCIES:
-                continue
-            self._add_grpc_component(component, protos)
-
-        self._add_grpc_component("bigtable", "bigtable_protos")
-        self._add_grpc_component("iam", "iam_protos")
-        self._add_grpc_component("pubsub", "pubsub_protos", ["abseil::absl_flat_hash_map"])
-        self._add_grpc_component("spanner", "spanner_protos",  ["abseil::absl_fixed_array", "abseil::absl_numeric", "abseil::absl_strings", "abseil::absl_time"])
 
         self.cpp_info.components["storage"].requires = ["rest_internal", "common", "nlohmann_json::nlohmann_json", "abseil::absl_memory", "abseil::absl_strings", "abseil::absl_str_format", "abseil::absl_time", "abseil::absl_variant", "crc32c::crc32c", "libcurl::libcurl", "openssl::ssl", "openssl::crypto", "zlib::zlib"]
         self.cpp_info.components["storage"].libs = ["google_cloud_cpp_storage"]

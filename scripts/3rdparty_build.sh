@@ -112,6 +112,7 @@ run_conan() {
     fi
     env \
       -u LD_LIBRARY_PATH \
+      -u DYLD_LIBRARY_PATH \
       -u PYTHONPATH \
       -u PYTHONHOME \
       -u PYTHONNOUSERSITE \
@@ -119,6 +120,21 @@ run_conan() {
       conan "$@"
   else
     conan "$@"
+  fi
+}
+
+run_host_python() {
+  if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+    env \
+      -u LD_LIBRARY_PATH \
+      -u DYLD_LIBRARY_PATH \
+      -u PYTHONPATH \
+      -u PYTHONHOME \
+      -u PYTHONNOUSERSITE \
+      PATH="${PATH}" \
+      python3 "$@"
+  else
+    python3 "$@"
   fi
 }
 
@@ -148,7 +164,7 @@ ensure_conan_supports_compiler_version() {
   fi
   settings_file="${conan_home}/settings.yml"
 
-  conan_python="$(python3 - <<'PY'
+  conan_python="$(run_host_python - <<'PY'
 from pathlib import Path
 import os
 import sys
@@ -171,7 +187,15 @@ PY
     return 0
   fi
 
-  "${conan_python}" - "${settings_file}" "${compiler_name}" "${compiler_version}" <<'PY'
+  if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+    env \
+      -u LD_LIBRARY_PATH \
+      -u DYLD_LIBRARY_PATH \
+      -u PYTHONPATH \
+      -u PYTHONHOME \
+      -u PYTHONNOUSERSITE \
+      PATH="${PATH}" \
+      "${conan_python}" - "${settings_file}" "${compiler_name}" "${compiler_version}" <<'PY'
 from pathlib import Path
 import importlib
 import sys
@@ -232,6 +256,69 @@ lines[version_end] = last_line[:closing] + insert + last_line[closing:]
 settings_path.write_text("\n".join(lines) + "\n")
 print(f"Patched {settings_path} to admit {compiler_name} {compiler_version}")
 PY
+  else
+    "${conan_python}" - "${settings_file}" "${compiler_name}" "${compiler_version}" <<'PY'
+from pathlib import Path
+import importlib
+import sys
+
+settings_path = Path(sys.argv[1])
+compiler_name = sys.argv[2]
+compiler_version = sys.argv[3]
+settings_path.parent.mkdir(parents=True, exist_ok=True)
+
+if not settings_path.exists():
+    try:
+        conans = importlib.import_module("conans")
+        migrations = importlib.import_module("conans.client.migrations_settings")
+        version_key = f"settings_{conans.__version__.replace('.', '_')}"
+        default_settings = getattr(migrations, version_key)
+    except Exception:
+        default_settings = None
+    if not default_settings:
+        sys.exit(0)
+    settings_path.write_text(default_settings if default_settings.endswith("\n") else default_settings + "\n")
+    print(f"Seeded {settings_path} from Conan defaults")
+
+lines = settings_path.read_text().splitlines()
+compiler_header = f"{compiler_name}:"
+
+in_block = False
+version_start = None
+version_end = None
+for i, line in enumerate(lines):
+    stripped = line.strip()
+    if stripped == compiler_header:
+        in_block = True
+        continue
+    if in_block and line.startswith("    ") and stripped.endswith(":") and not line.startswith("        "):
+        break
+    if in_block and stripped.startswith("version:"):
+        version_start = i
+        version_end = i
+        while version_end < len(lines) and "]" not in lines[version_end]:
+            version_end += 1
+        break
+
+if version_start is None or version_end is None or version_end >= len(lines):
+    sys.exit(0)
+
+version_blob = "\n".join(lines[version_start:version_end + 1])
+needle = f'"{compiler_version}"'
+if needle in version_blob:
+    print(f"Conan settings already include {compiler_name} {compiler_version}")
+    sys.exit(0)
+
+last_line = lines[version_end]
+closing = last_line.rfind("]")
+if closing == -1:
+    sys.exit(0)
+insert = f', "{compiler_version}"'
+lines[version_end] = last_line[:closing] + insert + last_line[closing:]
+settings_path.write_text("\n".join(lines) + "\n")
+print(f"Patched {settings_path} to admit {compiler_name} {compiler_version}")
+PY
+  fi
 }
 
 ensure_conan_profile_env() {
@@ -242,7 +329,7 @@ ensure_conan_profile_env() {
   [[ -n "${profile_file}" && -f "${profile_file}" ]] || return 0
   [[ -n "${key}" ]] || return 0
 
-  python3 - "${profile_file}" "${key}" "${value}" <<'PY'
+  run_host_python - "${profile_file}" "${key}" "${value}" <<'PY'
 from pathlib import Path
 import sys
 

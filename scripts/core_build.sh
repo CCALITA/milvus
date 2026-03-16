@@ -230,15 +230,21 @@ CPU_ARCH=$(get_cpu_arch $CPU_TARGET)
 # In case any 3rdparty (e.g. libavrocpp) requires a minimum version of CMake lower than 3.5
 export CMAKE_POLICY_VERSION_MINIMUM=3.5
 
-# Prefer Conan-provided CMake (knowhere currently requires >=3.26.4; Ubuntu 22.04 ships 3.22.x)
+# Prefer Nix-shell CMake for the Linux clang+libc++ flake env; otherwise fall back to
+# Conan-provided CMake (knowhere currently requires >=3.26.4; Ubuntu 22.04 ships 3.22.x).
 CONAN_HOME_DIR="${CONAN_USER_HOME:-$HOME}/.conan"
 CONAN_CMAKE_EXE=""
-if [[ -d "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" ]]; then
+if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+  CONAN_CMAKE_EXE="$(command -v cmake || true)"
+  if [[ -n "${CONAN_CMAKE_EXE}" ]]; then
+    echo "Using Nix shell CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
+  fi
+elif [[ -d "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" ]]; then
   CONAN_CMAKE_EXE=$(find "${CONAN_HOME_DIR}/data/cmake/3.30.5/_/_/package" -maxdepth 3 -type f -name cmake 2>/dev/null | head -n1 || true)
-fi
-if [[ -n "${CONAN_CMAKE_EXE}" ]]; then
-  export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
-  echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
+  if [[ -n "${CONAN_CMAKE_EXE}" ]]; then
+    export PATH="$(dirname "${CONAN_CMAKE_EXE}"):${PATH}"
+    echo "Using Conan CMake: $(${CONAN_CMAKE_EXE} --version | head -n1)"
+  fi
 fi
 
 CMAKE_COMPILER_ARGS=""

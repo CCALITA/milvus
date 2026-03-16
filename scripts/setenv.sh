@@ -128,15 +128,19 @@ case "${unameOut}" in
           export MILVUS_ENABLE_ASAN_LIB="$MILVUS_ENABLE_ASAN_LIB"
       fi
 
-      LIBJEMALLOC=$PWD/internal/core/output/lib/libjemalloc.so
-      if test -f "$LIBJEMALLOC"; then
-        export LD_PRELOAD="$LIBJEMALLOC"
-      else
-        echo "WARN: Cannot find $LIBJEMALLOC"
-      fi
       export PKG_CONFIG_PATH="${PKG_CONFIG_PATH}:$ROOT_DIR/internal/core/output/lib/pkgconfig:$ROOT_DIR/internal/core/output/lib64/pkgconfig"
-      export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$ROOT_DIR/internal/core/output/lib:$ROOT_DIR/internal/core/output/lib64"
-      export RPATH=$LD_LIBRARY_PATH;;
+      if [[ "${MILVUS_NIX_CLANG_LIBCXX:-0}" == "1" ]]; then
+        echo "Skipping LD_PRELOAD/LD_LIBRARY_PATH injection for Nix clang+libc++ build env"
+      else
+        LIBJEMALLOC=$PWD/internal/core/output/lib/libjemalloc.so
+        if test -f "$LIBJEMALLOC"; then
+          export LD_PRELOAD="$LIBJEMALLOC"
+        else
+          echo "WARN: Cannot find $LIBJEMALLOC"
+        fi
+        export LD_LIBRARY_PATH="${LD_LIBRARY_PATH}:$ROOT_DIR/internal/core/output/lib:$ROOT_DIR/internal/core/output/lib64"
+        export RPATH=$LD_LIBRARY_PATH
+      fi;;
     Darwin*)
       # detect llvm version by valid list (supports LLVM 14-17)
       # Note: LLVM 18 is NOT supported because Conan 1.x cannot handle the newer
