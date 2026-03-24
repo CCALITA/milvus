@@ -46,9 +46,10 @@ class PluginLoader {
         // void *handle = dlopen(path.c_str(), RTLD_LAZY | RTLD_DEEPBIND);
         if (!handle) {
             const char* error = dlerror();
-            ThrowInfo(
-                UnexpectedError,
-                fmt::format("Failed to load plugin: {}, err={}", path, error));
+            ThrowInfo(UnexpectedError,
+                      "Failed to load plugin: {}, err={}",
+                      path,
+                      error);
         }
 
         // Rest error flags
@@ -62,16 +63,18 @@ class PluginLoader {
         if (error) {
             dlclose(handle);
             ThrowInfo(UnexpectedError,
-                      fmt::format("Failed to load plugin: {}", error));
+                      "Failed to load plugin: {}",
+                      error);
         }
 
         error = dlerror();
         auto pluginPtr = createPluginFunc();
         if (!pluginPtr) {
             dlclose(handle);
-            ThrowInfo(
-                UnexpectedError,
-                fmt::format("Failed to init plugin: {}, {}", path, error));
+            ThrowInfo(UnexpectedError,
+                      "Failed to init plugin: {}, {}",
+                      path,
+                      error);
         }
 
         std::string pluginName = pluginPtr->getPluginName();

@@ -214,7 +214,9 @@ ChunkedSegmentSealedImpl::LoadScalarIndex(LoadIndexInfo& info) {
     auto field_id = FieldId(info.field_id);
     auto& field_meta = schema_->operator[](field_id);
 
-    auto is_pk = field_id == schema_->get_primary_field_id();
+    auto primary_field_id = schema_->get_primary_field_id();
+    auto is_pk =
+        primary_field_id.has_value() && primary_field_id->get() == field_id.get();
 
     LOG_INFO("LoadScalarIndex, fieldID:{}. segmentID:{}, is_pk:{}",
              info.field_id,
@@ -2770,7 +2772,9 @@ ChunkedSegmentSealedImpl::load_field_data_common(
     }
 
     // set pks to offset
-    if (schema_->get_primary_field_id() == field_id && !is_sorted_by_pk_) {
+    auto primary_field_id = schema_->get_primary_field_id();
+    if (primary_field_id.has_value() &&
+        primary_field_id->get() == field_id.get() && !is_sorted_by_pk_) {
         AssertInfo(field_id.get() != -1, "Primary key is -1");
         AssertInfo(insert_record_.empty_pks(),
                    "primary key records already exists, current field id {}",

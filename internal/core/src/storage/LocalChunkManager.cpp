@@ -48,7 +48,7 @@ LocalChunkManager::Size(const std::string& filepath) {
     boost::filesystem::path absPath(filepath);
 
     if (!Exist(filepath)) {
-        ThrowInfo(PathNotExist, "invalid local path:" + absPath.string());
+        ThrowInfo(PathNotExist, "invalid local path:{}", absPath.string());
     }
     boost::system::error_code err;
     int64_t size = boost::filesystem::file_size(absPath, err);
@@ -204,12 +204,12 @@ void
 LocalChunkManager::CreateDir(const std::string& dir) {
     bool isExist = DirExist(dir);
     if (isExist) {
-        ThrowInfo(PathAlreadyExist, "dir:" + dir + " already exists");
+        ThrowInfo(PathAlreadyExist, "dir:{} already exists", dir);
     }
     boost::filesystem::path dirPath(dir);
     auto create_success = boost::filesystem::create_directories(dirPath);
     if (!create_success) {
-        ThrowInfo(FileCreateFailed, "create dir:" + dir + " failed");
+        ThrowInfo(FileCreateFailed, "create dir:{} failed", dir);
     }
 }
 

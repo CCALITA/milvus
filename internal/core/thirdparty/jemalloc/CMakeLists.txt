@@ -35,9 +35,27 @@ endmacro()
 detect_aarch64_target_arch()
 
 set(JEMALLOC_PREFIX "${CMAKE_INSTALL_PREFIX}")
+if (DEFINED ENV{MILVUS_NIX_CLANG_LIBCXX} AND "$ENV{MILVUS_NIX_CLANG_LIBCXX}" STREQUAL "1")
+    # In the Nix clang+libc++ proof shell, repeatedly reinstalling jemalloc into the
+    # shared Milvus output tree causes permission failures on reruns. Keep the vendored
+    # jemalloc install isolated inside the build tree for this path.
+    set(JEMALLOC_PREFIX "${CMAKE_BINARY_DIR}/thirdparty/jemalloc-install")
+endif ()
 set(JEMALLOC_LIB_DIR "${JEMALLOC_PREFIX}/lib")
 set(JEMALLOC_STATIC_LIB "${JEMALLOC_LIB_DIR}/libjemalloc_pic${CMAKE_STATIC_LIBRARY_SUFFIX}")
-set(JEMALLOC_CONFIGURE_COMMAND ./configure "AR=${CMAKE_AR}" "CC=${CMAKE_C_COMPILER}" "CFLAGS=-fno-omit-frame-pointer" "CXXFLAGS=-fno-omit-frame-pointer")
+set(JEMALLOC_CFLAGS "-fno-omit-frame-pointer")
+set(JEMALLOC_CXXFLAGS "${CMAKE_CXX_FLAGS} ${CMAKE_CXX_FLAGS_${UPPERCASE_BUILD_TYPE}} -fno-omit-frame-pointer")
+set(JEMALLOC_LDFLAGS "${CMAKE_EXE_LINKER_FLAGS} ${CMAKE_SHARED_LINKER_FLAGS}")
+string(STRIP "${JEMALLOC_CXXFLAGS}" JEMALLOC_CXXFLAGS)
+string(STRIP "${JEMALLOC_LDFLAGS}" JEMALLOC_LDFLAGS)
+set(JEMALLOC_CONFIGURE_COMMAND
+        ./configure
+        "AR=${CMAKE_AR}"
+        "CC=${CMAKE_C_COMPILER}"
+        "CXX=${CMAKE_CXX_COMPILER}"
+        "CFLAGS=${JEMALLOC_CFLAGS}"
+        "CXXFLAGS=${JEMALLOC_CXXFLAGS}"
+        "LDFLAGS=${JEMALLOC_LDFLAGS}")
 
 message("CMAKE_OSX_SYSROOT: ${CMAKE_OSX_SYSROOT}")
 if (CMAKE_OSX_SYSROOT)

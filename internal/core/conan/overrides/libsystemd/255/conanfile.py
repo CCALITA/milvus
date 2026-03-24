@@ -1,0 +1,197 @@
+import os
+import re
+import tarfile
+
+from conan import ConanFile
+from conan.errors import ConanInvalidConfiguration
+from conan.tools.env import VirtualBuildEnv
+from conan.tools.files import copy, download, move_folder_contents, replace_in_file
+from conan.tools.gnu import PkgConfigDeps
+from conan.tools.layout import basic_layout
+from conan.tools.meson import Meson, MesonToolchain
+from conan.tools.scm import Version
+
+required_conan_version = ">=1.61.0"
+
+
+class LibsystemdConan(ConanFile):
+    name = "libsystemd"
+    license = "LGPL-2.1-or-later"
+    url = "https://github.com/conan-io/conan-center-index"
+    homepage = "https://www.freedesktop.org/wiki/Software/systemd/"
+    description = "System and Service Manager API library"
+    topics = ("systemd", "service", "manager")
+    package_type = "library"
+    settings = "os", "arch", "compiler", "build_type"
+    options = {
+        "shared": [True, False],
+        "fPIC": [True, False],
+        "with_selinux": [True, False],
+        "with_lz4": [True, False],
+        "with_xz": [True, False],
+        "with_zstd": [True, False],
+    }
+    default_options = {
+        "shared": False,
+        "fPIC": True,
+        "with_selinux": True,
+        "with_lz4": True,
+        "with_xz": True,
+        "with_zstd": True,
+    }
+
+    def configure(self):
+        if self.options.shared:
+            del self.options.fPIC
+        self.settings.rm_safe("compiler.cppstd")
+        self.settings.rm_safe("compiler.libcxx")
+
+    def layout(self):
+        basic_layout(self, src_folder="src")
+
+    @property
+    def _compilers_minimum_version(self):
+        return {
+            "gcc": "7",
+            "clang": "10",
+        }
+
+    def requirements(self):
+        self.requires("libcap/2.69")
+        self.requires("libmount/2.39.2")
+        self.requires("libxcrypt/4.4.36")
+        if self.options.with_selinux:
+            self.requires("libselinux/3.6")
+        if self.options.with_lz4:
+            self.requires("lz4/1.9.4")
+        if self.options.with_xz:
+            self.requires("xz_utils/5.4.5")
+        if self.options.with_zstd:
+            self.requires("zstd/1.5.5")
+
+    def validate(self):
+        if self.settings.os != "Linux":
+            raise ConanInvalidConfiguration("Only Linux supported")
+        minimum_version = self._compilers_minimum_version.get(str(self.settings.compiler), False)
+        if Version(self.version) >= "255.0" and minimum_version and Version(self.settings.compiler.version) < minimum_version:
+            raise ConanInvalidConfiguration(
+                f"{self.ref} requires {str(self.settings.compiler)} >= {minimum_version}."
+            )
+
+    def build_requirements(self):
+        self.tool_requires("meson/1.4.0")
+        self.tool_requires("m4/1.4.19")
+        self.tool_requires("gperf/3.1")
+        if not self.conf.get("tools.gnu:pkg_config", check_type=str):
+            self.tool_requires("pkgconf/2.1.0")
+
+    def source(self):
+        download(self, **self.conan_data["sources"][self.version], filename="sources.tar.gz")
+        with tarfile.open("sources.tar.gz", "r:gz") as tar:
+            tar.extractall()
+        move_folder_contents(self, os.path.join(self.source_folder, f"systemd-stable-{self.version}"), self.source_folder)
+
+    @property
+    def _so_version(self):
+        meson_build = os.path.join(self.source_folder, "meson.build")
+        with open(meson_build, "r", encoding="utf-8") as build_file:
+            for line in build_file:
+                match = re.match(r"^libsystemd_version = '(.*)'$", line)
+                if match:
+                    return match.group(1)
+        return ""
+
+    def generate(self):
+        env = VirtualBuildEnv(self)
+        env.generate()
+
+        tc = MesonToolchain(self)
+        tc.project_options["selinux"] = ("true" if self.options.with_selinux else "false")
+        tc.project_options["lz4"] = ("true" if self.options.with_lz4 else "false")
+        tc.project_options["xz"] = "true" if self.options.with_xz else "false"
+        tc.project_options["zstd"] = ("true" if self.options.with_zstd else "false")
+
+        if self.options.shared:
+            tc.project_options["static-libsystemd"] = "false"
+        elif self.options.fPIC:
+            tc.project_options["static-libsystemd"] = "pic"
+        else:
+            tc.project_options["static-libsystemd"] = "no-pic"
+
+        unrelated = [
+            "fdisk", "seccomp", "pwquality", "apparmor", "polkit", "audit",
+            "kmod", "microhttpd", "libcryptsetup", "libcurl", "libidn",
+            "libidn2", "qrencode", "openssl", "libfido2", "zlib", "xkbcommon",
+            "pcre2", "glib", "dbus", "blkid", "gcrypt", "p11kit", "ima",
+            "smack", "bzip2", "gnutls", "idn", "initrd", "binfmt", "vconsole",
+            "quotacheck", "tmpfiles", "environment-d", "sysusers", "firstboot",
+            "randomseed", "backlight", "rfkill", "xdg-autostart", "logind",
+            "hibernate", "machined", "portabled", "userdb", "hostnamed",
+            "timedated", "timesyncd", "localed", "networkd", "resolve",
+            "coredump", "pstore", "efi", "nss-myhostname", "nss-mymachines",
+            "nss-resolve", "nss-systemd", "hwdb", "tpm", "man", "html", "utmp",
+            "ldconfig", "adm-group", "wheel-group", "gshadow", "install-tests",
+            "link-udev-shared", "link-systemctl-shared", "analyze", "pam",
+            "link-networkd-shared", "link-timesyncd-shared", "kernel-install",
+            "libiptc", "elfutils", "repart", "homed", "importd", "acl",
+            "dns-over-tls", "log-trace"
+        ]
+
+        unrelated.append("oomd")
+        unrelated.extend(["sysext", "nscd"])
+        unrelated.append("link-boot-shared")
+        unrelated.append("link-journalctl-shared")
+        if Version(self.version) < "254.7":
+            unrelated.extend(["gnu-efi", "valgrind"])
+        else:
+            unrelated.extend(["passwdqc", "bootloader", "link-portabled-shared"])
+
+        for opt in unrelated:
+            tc.project_options[opt] = "false"
+
+        for dependency in self.dependencies.values():
+            for includedir in dependency.cpp_info.aggregated_components().includedirs:
+                tc.c_args.append(f"-I{includedir}")
+
+        tc.generate()
+
+        deps = PkgConfigDeps(self)
+        deps.generate()
+
+    def _patch_sources(self):
+        meson_build = os.path.join(self.source_folder, "meson.build")
+        replace_in_file(self, meson_build, "@CONAN_SRC_REL_PATH@", f"'../{self.source_path.name}'", strict=False)
+
+        basic_meson_build = os.path.join(self.source_folder, "src", "basic", "meson.build")
+        replace_in_file(
+            self,
+            basic_meson_build,
+            "if r.returncode() != 0\n        error('Unknown filesystems defined in kernel headers:\\n\\n' + r.stdout())\nendif\n",
+            "if r.returncode() != 0\n        warning('Ignoring unknown filesystems from newer kernel headers in Conan override:\\n\\n' + r.stdout())\nendif\n",
+            strict=False,
+        )
+
+    def build(self):
+        self._patch_sources()
+        meson = Meson(self)
+        meson.configure()
+        target = ("systemd:shared_library" if self.options.shared else "systemd:static_library")
+        meson.build(target=f"version.h {target}")
+
+    def package(self):
+        copy(self, "LICENSE.LGPL2.1", self.source_folder, os.path.join(self.package_folder, "licenses"))
+        copy(self, "*.h", os.path.join(self.source_folder, "src", "systemd"), os.path.join(self.package_folder, "include", "systemd"))
+
+        if self.options.shared:
+            copy(self, "libsystemd.so", self.build_folder, os.path.join(self.package_folder, "lib"))
+            copy(self, "libsystemd.so.{}".format(self._so_version.split('.')), self.build_folder, os.path.join(self.package_folder, "lib"))
+            copy(self, "libsystemd.so.{}".format(self._so_version), self.build_folder, os.path.join(self.package_folder, "lib"))
+        else:
+            copy(self, "libsystemd.a", self.build_folder, os.path.join(self.package_folder, "lib"))
+
+    def package_info(self):
+        self.cpp_info.set_property("pkg_config_name", "libsystemd")
+        self.cpp_info.set_property("component_version", str(Version(self.version).major))
+        self.cpp_info.libs = ["systemd"]
+        self.cpp_info.system_libs = ["rt", "pthread", "dl"]
+        self.cpp_info.version = str(Version(self.version).major)

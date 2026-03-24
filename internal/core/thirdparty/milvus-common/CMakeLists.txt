@@ -38,6 +38,19 @@ FetchContent_Declare(
 FetchContent_GetProperties( milvus-common )
 if ( NOT milvus-common_POPULATED )
     FetchContent_Populate( milvus-common )
+
+    set(MILVUS_COMMON_EASYASSERT_HEADER
+        ${milvus-common_SOURCE_DIR}/include/common/EasyAssert.h)
+    if (EXISTS ${MILVUS_COMMON_EASYASSERT_HEADER})
+        file(READ ${MILVUS_COMMON_EASYASSERT_HEADER} MILVUS_COMMON_EASYASSERT_CONTENT)
+        string(REPLACE "fmt::format(info, ##args)"
+                       "fmt::format(fmt::runtime(info), ##args)"
+                       MILVUS_COMMON_EASYASSERT_CONTENT
+                       "${MILVUS_COMMON_EASYASSERT_CONTENT}")
+        file(WRITE ${MILVUS_COMMON_EASYASSERT_HEADER} "${MILVUS_COMMON_EASYASSERT_CONTENT}")
+        message(STATUS "Patched milvus-common EasyAssert.h for runtime fmt strings under clang+libc++")
+    endif()
+
     # Adding the following target:
     # milvus-common
     add_subdirectory( ${milvus-common_SOURCE_DIR}

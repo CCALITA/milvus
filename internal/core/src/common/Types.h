@@ -24,6 +24,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <type_traits>
 #include <unordered_map>
@@ -97,9 +98,30 @@ enum class DataType {
     VECTOR_ARRAY = 106,
 };
 
+std::string_view
+DataTypeNameView(DataType data_type);
+
+std::string
+GetDataTypeName(DataType data_type);
+
 using Timestamp = uint64_t;  // TODO: use TiKV-like timestamp
 constexpr auto MAX_TIMESTAMP = std::numeric_limits<Timestamp>::max();
 constexpr auto MAX_ROW_COUNT = std::numeric_limits<idx_t>::max();
+
+}  // namespace milvus
+
+namespace fmt {
+template <>
+struct formatter<milvus::DataType> : formatter<std::string_view> {
+    auto
+    format(milvus::DataType data_type, format_context& ctx) const {
+        return formatter<std::string_view>::format(
+            milvus::DataTypeNameView(data_type), ctx);
+    }
+};
+}  // namespace fmt
+
+namespace milvus {
 
 using OpType = proto::plan::OpType;
 using ArithOpType = proto::plan::ArithOpType;
@@ -147,10 +169,9 @@ GetDataTypeSize(DataType data_type, int dim = 1) {
         // them. Caller of this method must handle this case themselves and must
         // not pass variable length types to this method.
         default: {
-            ThrowInfo(
-                DataTypeInvalid,
-                fmt::format("failed to get data type size, invalid type {}",
-                            data_type));
+            ThrowInfo(DataTypeInvalid,
+                      "failed to get data type size, invalid type {}",
+                      GetDataTypeName(data_type));
         }
     }
 }
@@ -210,11 +231,9 @@ ToProtoDataType(DataType data_type) {
         // Internal-only or unsupported mappings
         case DataType::ROW:
         default:
-            ThrowInfo(
-                DataTypeInvalid,
-                fmt::format(
-                    "failed to convert to proto data type, invalid type {}",
-                    data_type));
+            ThrowInfo(DataTypeInvalid,
+                      "failed to convert to proto data type, invalid type {}",
+                      GetDataTypeName(data_type));
     }
 }
 
@@ -260,8 +279,8 @@ GetArrowDataType(DataType data_type, int dim = 1) {
             return arrow::fixed_size_binary(dim);
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("failed to get data type, invalid type {}",
-                                  data_type));
+                      "failed to get data type, invalid type {}",
+                      GetDataTypeName(data_type));
         }
     }
 }
@@ -286,9 +305,8 @@ GetArrowDataTypeForVectorArray(DataType elem_type, int dim) {
             return arrow::list(arrow::fixed_size_binary(dim));
         default: {
             ThrowInfo(DataTypeInvalid,
-                      fmt::format("failed to get arrow type for vector array, "
-                                  "invalid type {}",
-                                  elem_type));
+                      "failed to get arrow type for vector array, invalid type {}",
+                      GetDataTypeName(elem_type));
         }
     }
 }
@@ -304,8 +322,8 @@ GetVecRowSize(int64_t dim) {
 }
 
 // TODO: use magic_enum when available
-inline std::string
-GetDataTypeName(DataType data_type) {
+inline std::string_view
+DataTypeNameView(DataType data_type) {
     switch (data_type) {
         case DataType::NONE:
             return "none";
@@ -352,8 +370,15 @@ GetDataTypeName(DataType data_type) {
         case DataType::VECTOR_ARRAY:
             return "vector_array";
         default:
-            ThrowInfo(DataTypeInvalid, "Unsupported DataType({})", data_type);
+            ThrowInfo(DataTypeInvalid,
+                      "Unsupported DataType({})",
+                      static_cast<int>(data_type));
     }
+}
+
+inline std::string
+GetDataTypeName(DataType data_type) {
+    return std::string(DataTypeNameView(data_type));
 }
 
 inline size_t
@@ -886,7 +911,8 @@ vector_bytes_per_element(const DataType data_type, int64_t dim) {
             return dim * sizeof(int8);
         default:
             ThrowInfo(UnexpectedError,
-                      fmt::format("invalid data type: {}", data_type));
+                      "invalid data type: {}",
+                      GetDataTypeName(data_type));
     }
 }
 
@@ -894,86 +920,6 @@ bool
 IsFixedSizeType(DataType type);
 
 }  // namespace milvus
-template <>
-struct fmt::formatter<milvus::DataType> : formatter<string_view> {
-    auto
-    format(milvus::DataType c, format_context& ctx) const {
-        string_view name = "unknown";
-        switch (c) {
-            case milvus::DataType::NONE:
-                name = "NONE";
-                break;
-            case milvus::DataType::BOOL:
-                name = "BOOL";
-                break;
-            case milvus::DataType::INT8:
-                name = "INT8";
-                break;
-            case milvus::DataType::INT16:
-                name = "INT16";
-                break;
-            case milvus::DataType::INT32:
-                name = "INT32";
-                break;
-            case milvus::DataType::INT64:
-                name = "INT64";
-                break;
-            case milvus::DataType::FLOAT:
-                name = "FLOAT";
-                break;
-            case milvus::DataType::DOUBLE:
-                name = "DOUBLE";
-                break;
-            case milvus::DataType::TIMESTAMPTZ:
-                name = "TIMESTAMPTZ";
-                break;
-            case milvus::DataType::STRING:
-                name = "STRING";
-                break;
-            case milvus::DataType::VARCHAR:
-                name = "VARCHAR";
-                break;
-            case milvus::DataType::TEXT:
-                name = "TEXT";
-                break;
-            case milvus::DataType::ARRAY:
-                name = "ARRAY";
-                break;
-            case milvus::DataType::JSON:
-                name = "JSON";
-                break;
-            case milvus::DataType::GEOMETRY:
-                name = "GEOMETRY";
-                break;
-            case milvus::DataType::ROW:
-                name = "ROW";
-                break;
-            case milvus::DataType::VECTOR_BINARY:
-                name = "VECTOR_BINARY";
-                break;
-            case milvus::DataType::VECTOR_FLOAT:
-                name = "VECTOR_FLOAT";
-                break;
-            case milvus::DataType::VECTOR_FLOAT16:
-                name = "VECTOR_FLOAT16";
-                break;
-            case milvus::DataType::VECTOR_BFLOAT16:
-                name = "VECTOR_BFLOAT16";
-                break;
-            case milvus::DataType::VECTOR_SPARSE_U32_F32:
-                name = "VECTOR_SPARSE_U32_F32";
-                break;
-            case milvus::DataType::VECTOR_INT8:
-                name = "VECTOR_INT8";
-                break;
-            case milvus::DataType::VECTOR_ARRAY:
-                name = "VECTOR_ARRAY";
-                break;
-        }
-        return formatter<string_view>::format(name, ctx);
-    }
-};
-
 template <>
 struct fmt::formatter<milvus::OpType> : formatter<string_view> {
     auto

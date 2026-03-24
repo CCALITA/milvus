@@ -1,0 +1,8 @@
+sources:
+  2.4.7:
+    url:
+      - https://ftpmirror.gnu.org/libtool/libtool-2.4.7.tar.gz
+      - https://mirror.csclub.uwaterloo.ca/gnu/libtool/libtool-2.4.7.tar.gz
+      - https://mirrors.aliyun.com/gnu/libtool/libtool-2.4.7.tar.gz
+      - https://ftp.gnu.org/gnu/libtool/libtool-2.4.7.tar.gz
+    sha256: 04e96c2404ea70c590c546eba4202a4e12722c640016c12b9b2f1ce3d481e9a8

@@ -1416,7 +1416,8 @@ SegmentGrowingImpl::bulk_subscript(milvus::OpContext* op_ctx,
         default: {
             ThrowInfo(
                 DataTypeInvalid,
-                fmt::format("unsupported type {}", field_meta.get_data_type()));
+                fmt::format("unsupported type {}",
+                            GetDataTypeName(field_meta.get_data_type())));
         }
     }
     return result;
@@ -1747,7 +1748,8 @@ SegmentGrowingImpl::bulk_subscript(milvus::OpContext* op_ctx,
         default: {
             ThrowInfo(
                 DataTypeInvalid,
-                fmt::format("unsupported type {}", field_meta.get_data_type()));
+                fmt::format("unsupported type {}",
+                            GetDataTypeName(field_meta.get_data_type())));
         }
     }
 }

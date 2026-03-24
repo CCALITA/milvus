@@ -1074,11 +1074,20 @@ PhyUnaryRangeFilterExpr::ExecRangeVisitorImplJsonByStats() {
                                                          nullptr,
                                                          res_view,
                                                          valid_res_view);
+                using LogValueType = std::decay_t<decltype(val)>;
+                const auto val_for_log = [&]() {
+                    if constexpr (std::is_same_v<LogValueType,
+                                                 proto::plan::Array>) {
+                        return val.ShortDebugString();
+                    } else {
+                        return fmt::format("{}", val);
+                    }
+                }();
                 LOG_DEBUG(
                     "using shredding data's field: {} with value {}, count {} "
                     "for segment {}",
                     target_field,
-                    val,
+                    val_for_log,
                     res_view.count(),
                     segment_->get_segment_id());
             }

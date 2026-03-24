@@ -80,7 +80,7 @@ The following specification (either physical or virtual machine resources) is re
 | Platform | Compiler | Supported Versions |
 |----------|----------|-------------------|
 | macOS | LLVM/Clang | 14, 15, 16, 17, 18 |
-| Linux | GCC | 9, 10, 11, 12, 13, 14 |
+| Linux | LLVM/Clang + libc++ | x86_64 via `nix develop .#linux-clang-libcxx` (Clang 18 in flake) |
 
 **Tool Requirements:**
 
@@ -134,9 +134,15 @@ In the Milvus repository root, simply run:
 ./scripts/install_deps.sh
 ```
 
+For the supported Linux `x86_64` clang + libc++ path, enter the flake shell instead:
+
+```bash
+nix develop .#linux-clang-libcxx
+```
+
 This script will:
 - Detect your OS and version automatically
-- Install the appropriate compiler (LLVM on macOS, GCC on Linux)
+- Install the appropriate compiler toolchain (LLVM on macOS, GCC + LLVM/clang on Linux)
 - Install CMake, Ninja, ccache, and other build tools
 - Install Conan package manager
 - Install Rust toolchain
@@ -151,9 +157,14 @@ Once you have finished, confirm that the compiler is installed:
 # On macOS
 clang --version
 
-# On Linux
+# On Linux host toolchain flow
 gcc --version
+
+# On Linux x86_64 flake clang + libc++ flow
+nix develop .#linux-clang-libcxx -c clang --version
 ```
+
+The flake shell exports `MILVUS_USE_CLANG=1` and `MILVUS_CLANG_STDLIB=libc++` for the existing build scripts.
 
 #### CMake & Conan
 
@@ -205,6 +216,33 @@ To build the Milvus project, run the following command:
 ```shell
 make
 ```
+
+For Linux `x86_64`, the supported clang path uses the flake shell plus `libc++`:
+
+```bash
+nix develop .#linux-clang-libcxx
+rm -rf cmake_build
+bash scripts/3rdparty_build.sh -t Release
+bash scripts/core_build.sh -t Release
+```
+
+If you prefer the Makefile entrypoint, use:
+
+```bash
+nix develop .#linux-clang-libcxx
+rm -rf cmake_build
+make build-cpp
+```
+
+To build the full Milvus binary in the same shell, run:
+
+```bash
+nix develop .#linux-clang-libcxx
+rm -rf cmake_build
+make
+```
+
+This path is explicit and Linux-only. The default host-toolchain flow remains unchanged.
 
 Milvus uses `conan` to manage 3rd-party dependencies. `conan` will check the consistency of these dependencies every time you run `make`. This process can take a considerable amount of time, especially if the network is poor. If you make sure that the 3rd-party dependencies are consistent, you can use the following command to skip this step:
 

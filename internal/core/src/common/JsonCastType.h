@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 
 #include "common/Types.h"
@@ -60,10 +61,11 @@ class JsonCastType {
 }  // namespace milvus
 
 template <>
-struct fmt::formatter<milvus::JsonCastType::DataType> : formatter<string_view> {
+struct fmt::formatter<milvus::JsonCastType::DataType>
+    : fmt::formatter<std::string_view> {
     auto
     format(milvus::JsonCastType::DataType c, format_context& ctx) const {
-        string_view name = "unknown";
+        std::string_view name = "unknown";
         switch (c) {
             case milvus::JsonCastType::DataType::BOOL:
                 name = "BOOL";
@@ -77,18 +79,25 @@ struct fmt::formatter<milvus::JsonCastType::DataType> : formatter<string_view> {
             case milvus::JsonCastType::DataType::ARRAY:
                 name = "ARRAY";
                 break;
+            case milvus::JsonCastType::DataType::JSON:
+                name = "JSON";
+                break;
+            case milvus::JsonCastType::DataType::UNKNOWN:
+                name = "UNKNOWN";
+                break;
         }
-        return formatter<string_view>::format(name, ctx);
+        return fmt::formatter<std::string_view>::format(name, ctx);
     }
 };
 
 template <>
-struct fmt::formatter<milvus::JsonCastType> : fmt::formatter<string_view> {
+struct fmt::formatter<milvus::JsonCastType>
+    : fmt::formatter<std::string_view> {
     auto
     format(const milvus::JsonCastType& c, format_context& ctx) const {
         if (c.data_type() == milvus::JsonCastType::DataType::ARRAY) {
-            return format_to(ctx.out(), "ARRAY_{}", c.element_type());
+            return fmt::format_to(ctx.out(), "ARRAY_{}", c.element_type());
         }
-        return format_to(ctx.out(), "{}", c.data_type());
+        return fmt::format_to(ctx.out(), "{}", c.data_type());
     }
 };

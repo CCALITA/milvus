@@ -459,7 +459,8 @@ IndexFactory::CreatePrimitiveScalarIndex(
         default:
             ThrowInfo(
                 DataTypeInvalid,
-                fmt::format("invalid data type to build index: {}", data_type));
+                fmt::format("invalid data type to build index: {}",
+                            GetDataTypeName(data_type)));
     }
 }
 
